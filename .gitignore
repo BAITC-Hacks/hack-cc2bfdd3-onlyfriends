@@ -6,3 +6,4 @@ raw/
 artifacts/
 .superpowers/
 *.pyc
+*.egg-info/

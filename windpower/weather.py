@@ -11,14 +11,19 @@ import requests
 
 
 URL = "https://single-runs-api.open-meteo.com/v1/forecast"
+PUBLICATION_DELAY_HOURS = 7
 SITES = (("1", 43.645150, 78.535604), ("2", 43.643198, 78.538828))
 VARIABLES = (
     "wind_speed_10m", "wind_speed_100m", "wind_direction_100m",
     "temperature_2m", "surface_pressure",
 )
+EXPECTED_UNITS = {
+    "wind_speed_10m": "m/s", "wind_speed_100m": "m/s",
+    "wind_direction_100m": "°", "temperature_2m": "°C", "surface_pressure": "hPa",
+}
 
 
-def select_run(issue_utc: datetime, delay_hours: int = 7) -> datetime:
+def select_run(issue_utc: datetime, delay_hours: int = PUBLICATION_DELAY_HOURS) -> datetime:
     """Select latest six-hour ECMWF cycle old enough to have been published."""
     if issue_utc.tzinfo is None or issue_utc.utcoffset() is None:
         raise ValueError("issue time must have timezone")
@@ -31,11 +36,11 @@ def _parse_payload(payload: list[dict], issue: datetime, run: datetime) -> pd.Da
         raise ValueError("weather response must contain both turbine locations")
     expected = pd.date_range(issue + timedelta(hours=1), periods=48, freq="h", tz="UTC")
     frames = []
-    for (turbine_id, _, _), site in zip(SITES, payload):
+    for (turbine_id, requested_latitude, requested_longitude), site in zip(SITES, payload):
         hourly = site.get("hourly", {})
         units = site.get("hourly_units", {})
-        if units.get("wind_speed_100m") != "m/s" or units.get("wind_speed_10m") != "m/s":
-            raise ValueError("unexpected wind speed unit")
+        if any(units.get(name) != unit for name, unit in EXPECTED_UNITS.items()):
+            raise ValueError("unexpected weather unit")
         if not all(name in hourly for name in ("time", *VARIABLES)):
             raise ValueError("missing weather variables")
         values = hourly["time"]
@@ -49,8 +54,13 @@ def _parse_payload(payload: list[dict], issue: datetime, run: datetime) -> pd.Da
         if frame[list(VARIABLES)].isna().any().any():
             raise ValueError("expected 48 hourly weather points after issue; found null")
         frame["turbine_id"] = turbine_id
+        frame["requested_latitude"] = requested_latitude
+        frame["requested_longitude"] = requested_longitude
+        frame["grid_latitude"] = float(site["latitude"])
+        frame["grid_longitude"] = float(site["longitude"])
         frame["issue_time_utc"] = pd.Timestamp(issue)
         frame["run_time_utc"] = pd.Timestamp(run)
+        frame["available_at_assumed_utc"] = pd.Timestamp(run + timedelta(hours=PUBLICATION_DELAY_HOURS))
         frame["lead_hour"] = range(1, 49)
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
@@ -87,21 +97,33 @@ def fetch_issue(issue_utc: datetime, cache_dir: Path, session: requests.Session 
             raise ValueError(f"weather cache integrity check failed: {path}")
     else:
         client = session or requests.Session()
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 response = client.get(URL, params=params, timeout=60)
-                if response.status_code == 429 or response.status_code >= 500:
-                    response.raise_for_status()
-                response.raise_for_status()
-                payload = response.json()
-                break
-            except requests.RequestException:
-                if attempt == 2:
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == 4:
                     raise
-                time.sleep(2 ** attempt)
+                time.sleep(min(2 ** (attempt + 1), 30))
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt == 4:
+                    response.raise_for_status()
+                retry_after = getattr(response, "headers", {}).get("Retry-After", "")
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = 2 ** (attempt + 1)
+                time.sleep(min(max(delay, 0), 30))
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            break
         _parse_payload(payload, issue, run)
         digest = sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps({"params": params, "sha256": digest, "payload": payload}), encoding="utf-8")
         temporary.replace(path)
-    return _parse_payload(payload, issue, run)
+    result = _parse_payload(payload, issue, run)
+    result.attrs["weather_sha256"] = digest
+    result.attrs["weather_source"] = URL
+    return result

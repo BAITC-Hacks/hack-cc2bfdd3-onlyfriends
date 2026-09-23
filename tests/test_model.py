@@ -56,3 +56,35 @@ def test_selection_uses_average_mae_not_best_single_month():
     ])
 
     assert model.choose_candidate(scores) == "stable"
+
+
+def test_fixed_blend_averages_direct_and_wind_corrected_models():
+    weather = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")], ("1", "2"))
+
+    class PairPredictor:
+        def __init__(self, values):
+            self.values = np.array(values)
+
+        def predict(self, frame):
+            return self.values
+
+    blend = model.BlendModel(PairPredictor([0.2, 0.8]), PairPredictor([0.4, 0.6]))
+    bundle = {"candidate": "blend_50", "model": blend, "model_version": "blend-test"}
+
+    np.testing.assert_allclose(model.predict(bundle, weather)["predicted_power"], [0.3, 0.7])
+
+
+def test_model_version_tracks_wind_calibration_labels():
+    frame = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
+    examples = model.make_features(frame)
+    examples["power"] = 0.4
+    examples["measured_wind"] = 7.0
+    examples["measured_temp"] = 2.0
+    history = examples[["valid_time_utc", "turbine_id", "power", "measured_wind", "measured_temp"]].copy()
+
+    first = model.training_fingerprint(examples, history, "blend_50")
+    changed = examples.copy()
+    changed["measured_wind"] = 8.0
+    second = model.training_fingerprint(changed, history, "blend_50")
+
+    assert first != second

@@ -15,6 +15,7 @@ from windpower.features import FEATURE_COLUMNS, make_features
 
 VALIDATION_MONTHS = ["2025-10", "2025-11", "2025-12", "2026-01"]
 CUTOFF = pd.Timestamp("2026-02-01", tz="Asia/Almaty").tz_convert("UTC")
+ALGORITHM_VERSION = "windpower-blend-v1"
 CANDIDATES = {
     "baseline": None,
     "direct_d4_l3": {"depth": 4, "l2_leaf_reg": 3},
@@ -22,6 +23,7 @@ CANDIDATES = {
     "direct_d6_l3": {"depth": 6, "l2_leaf_reg": 3},
     "direct_d6_l10": {"depth": 6, "l2_leaf_reg": 10},
     "two_stage": None,
+    "blend_50": None,
 }
 
 
@@ -63,6 +65,19 @@ class TwoStage:
         return self.power_curve.predict(corrected)
 
 
+class BlendModel:
+    """Fixed equal-weight blend of the strongest direct model and wind correction."""
+
+    def __init__(self, direct, two_stage):
+        self.direct = direct
+        self.two_stage = two_stage
+
+    def predict(self, frame: pd.DataFrame) -> np.ndarray:
+        direct = self.direct.predict(frame[FEATURE_COLUMNS])
+        corrected = self.two_stage.predict(frame)
+        return 0.5 * np.asarray(direct) + 0.5 * np.asarray(corrected)
+
+
 def rolling_folds(examples: pd.DataFrame, months: list[str] = VALIDATION_MONTHS):
     """Expanding training periods with a clean monthly holdout before February."""
     times = pd.to_datetime(examples["valid_time_utc"], utc=True)
@@ -101,6 +116,11 @@ def _fit_candidate(name: str, examples: pd.DataFrame, history: pd.DataFrame):
         return PowerCurve().fit(examples, "wind_speed_100m")
     if name == "two_stage":
         return TwoStage().fit(examples, history)
+    if name == "blend_50":
+        return BlendModel(
+            _fit_candidate("direct_d6_l10", examples, history),
+            _fit_candidate("two_stage", examples, history),
+        )
     settings = CANDIDATES[name]
     regressor = CatBoostRegressor(
         loss_function="MAE", iterations=500, learning_rate=0.04,
@@ -112,7 +132,7 @@ def _fit_candidate(name: str, examples: pd.DataFrame, history: pd.DataFrame):
 
 
 def _predict_candidate(name: str, fitted, features: pd.DataFrame) -> np.ndarray:
-    source = features if name == "two_stage" or name == "baseline" else features[FEATURE_COLUMNS]
+    source = features if name in ("two_stage", "baseline", "blend_50") else features[FEATURE_COLUMNS]
     return np.clip(np.asarray(fitted.predict(source), dtype=float), 0, 1)
 
 
@@ -130,6 +150,19 @@ def _score(actual: pd.Series, forecast: np.ndarray, lead: pd.Series) -> dict:
     }
 
 
+def training_fingerprint(examples: pd.DataFrame, history: pd.DataFrame, candidate: str) -> str:
+    """Version all fitting inputs and chosen algorithm, including wind labels."""
+    digest = sha256(json.dumps(
+        {"algorithm": ALGORITHM_VERSION, "candidate": candidate, "grid": CANDIDATES}, sort_keys=True
+    ).encode())
+    for frame, columns in (
+        (examples, ["issue_time_utc", "valid_time_utc", *FEATURE_COLUMNS, "power", "measured_wind", "measured_temp"]),
+        (history, ["valid_time_utc", "turbine_id", "power", "measured_wind", "measured_temp"]),
+    ):
+        digest.update(pd.util.hash_pandas_object(frame[columns], index=False).values.tobytes())
+    return digest.hexdigest()[:16]
+
+
 def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: Path) -> dict:
     """Compare candidates on historic months, refit winner, persist evidence."""
     output_dir = Path(output_dir)
@@ -137,21 +170,32 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     safe_examples = examples.loc[pd.to_datetime(examples.valid_time_utc, utc=True) < CUTOFF].copy()
     safe_history = history.loc[pd.to_datetime(history.valid_time_utc, utc=True) < CUTOFF].copy()
     scores = []
+    turbine_scores = []
     for month, (train, valid) in zip(VALIDATION_MONTHS, rolling_folds(safe_examples)):
         start = pd.Timestamp(f"{month}-01", tz="Asia/Almaty").tz_convert("UTC")
         past_history = safe_history.loc[safe_history.valid_time_utc < start]
+        forecasts = {}
         for name in CANDIDATES:
+            if name == "blend_50":
+                continue
             fitted = _fit_candidate(name, train, past_history)
             forecast = _predict_candidate(name, fitted, valid)
+            forecasts[name] = forecast
             scores.append({"month": month, "candidate": name, **_score(valid.power, forecast, valid.lead_hour)})
+            for turbine_id, positions in valid.groupby("turbine_id").indices.items():
+                group = valid.iloc[positions]
+                turbine_scores.append({"month": month, "candidate": name, "turbine_id": turbine_id, **_score(group.power, forecast[positions], group.lead_hour)})
+        blended = 0.5 * forecasts["direct_d6_l10"] + 0.5 * forecasts["two_stage"]
+        scores.append({"month": month, "candidate": "blend_50", **_score(valid.power, blended, valid.lead_hour)})
+        for turbine_id, positions in valid.groupby("turbine_id").indices.items():
+            group = valid.iloc[positions]
+            turbine_scores.append({"month": month, "candidate": "blend_50", "turbine_id": turbine_id, **_score(group.power, blended[positions], group.lead_hour)})
     metrics = pd.DataFrame(scores)
     metrics.to_csv(output_dir / "validation_metrics.csv", index=False)
+    pd.DataFrame(turbine_scores).to_csv(output_dir / "validation_metrics_by_turbine.csv", index=False)
     winner = choose_candidate(metrics)
     fitted = _fit_candidate(winner, safe_examples, safe_history)
-    fingerprint = pd.util.hash_pandas_object(
-        safe_examples[["valid_time_utc", "turbine_id", "power", "wind_speed_100m"]], index=False
-    ).values.tobytes()
-    model_version = sha256(winner.encode() + fingerprint).hexdigest()[:16]
+    model_version = training_fingerprint(safe_examples, safe_history, winner)
     bundle = {
         "candidate": winner,
         "model": fitted,
