@@ -3,6 +3,7 @@ import json
 
 from langchain_core.callbacks import BaseCallbackHandler
 import pandas as pd
+import pytest
 
 import windpower.agent as agent_module
 from windpower.agent import ForecastAgent
@@ -38,10 +39,11 @@ def predictor(features):
     return output
 
 
-def make_agent(tmp_path, weather_fetcher=None, model=predictor, version="test-model-v1"):
+def make_agent(tmp_path, weather_fetcher=None, model=predictor, version="test-model-v1", web_searcher=None):
     return ForecastAgent(
         model, version, tmp_path / "cache", tmp_path / "out",
         weather_fetcher=weather_fetcher or (lambda _: weather_frame()),
+        web_searcher=web_searcher,
     )
 
 
@@ -161,3 +163,84 @@ def test_langsmith_trace_uses_redacted_client(tmp_path, monkeypatch):
         "project_name": "windpower-test",
     }
     assert traced_runs
+
+
+def test_web_research_is_available_but_cannot_feed_historical_forecast(tmp_path):
+    searches = []
+
+    def search(query):
+        searches.append(query)
+        return {
+            "query": query, "retrieved_at_utc": "2026-09-23T00:00:00+00:00",
+            "results": [], "historical_availability_verified": False,
+        }
+
+    agent = make_agent(tmp_path, web_searcher=search)
+    forecast_result = agent.run(ISSUE)
+    research = agent.research_sources("  Open-Meteo   ECMWF  archive ")
+
+    assert forecast_result.status == "SUCCESS"
+    assert searches == ["Open-Meteo ECMWF archive"]
+    assert research["historical_availability_verified"] is False
+    assert "search_web" not in [event["step"] for event in forecast_result.events]
+
+
+def test_weather_failure_does_not_fall_back_to_current_web_search(tmp_path):
+    searches = []
+
+    def broken_fetch(_):
+        raise ConnectionError("archive unavailable")
+
+    def search(query):
+        searches.append(query)
+        return {
+            "query": query, "retrieved_at_utc": "2026-09-23T00:00:00+00:00",
+            "results": [], "historical_availability_verified": False,
+        }
+
+    agent = make_agent(
+        tmp_path, weather_fetcher=broken_fetch,
+        web_searcher=search,
+    )
+    result = agent.run(ISSUE)
+
+    assert result.error_code == "WEATHER_ERROR"
+    assert searches == []
+
+
+def test_daily_replay_uses_each_issue_and_stops_on_failure(tmp_path):
+    fetched = []
+
+    def fetch(issue):
+        fetched.append(issue)
+        if issue == ISSUE + timedelta(days=2):
+            raise ConnectionError("archive unavailable")
+        return weather_frame(issue=issue)
+
+    agent = make_agent(tmp_path, weather_fetcher=fetch)
+    results = agent.run_daily(ISSUE, ISSUE + timedelta(days=3))
+
+    assert fetched == [ISSUE + timedelta(days=day) for day in range(3)]
+    assert [result.status for result in results] == ["SUCCESS", "SUCCESS", "FAILED"]
+    assert results[-1].error_code == "WEATHER_ERROR"
+    assert len(list((tmp_path / "out").glob("*.json"))) == 2
+
+
+def test_daily_replay_covers_january_31_and_all_february_issues(tmp_path):
+    agent = make_agent(tmp_path, weather_fetcher=lambda issue: weather_frame(issue=issue))
+
+    results = agent.run_daily(ISSUE, datetime(2026, 2, 28, tzinfo=timezone.utc))
+
+    assert len(results) == 29
+    assert all(result.status == "SUCCESS" for result in results)
+    assert len({result.run_id for result in results}) == 29
+    assert len(list((tmp_path / "out").glob("*.json"))) == 29
+
+
+def test_daily_replay_rejects_misalignment_and_excessive_range(tmp_path):
+    agent = make_agent(tmp_path)
+
+    with pytest.raises(ValueError, match="one UTC hour"):
+        agent.run_daily(ISSUE, ISSUE + timedelta(days=1, hours=1))
+    with pytest.raises(ValueError, match="29 issues"):
+        agent.run_daily(ISSUE, ISSUE + timedelta(days=29))

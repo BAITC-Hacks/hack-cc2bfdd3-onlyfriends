@@ -5,6 +5,7 @@ description = "Leakage-safe hourly wind power forecasting from archived weather 
 requires-python = ">=3.10,<3.14"
 dependencies = [
   "catboost>=1.2.8,<2",
+  "ddgs>=9.16,<10",
   "joblib>=1.4,<2",
   "langchain>=1.4,<2",
   "langgraph>=1.2,<2",

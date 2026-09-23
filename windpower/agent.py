@@ -1,12 +1,11 @@
 """One bounded LangGraph workflow for an hourly wind-power forecast issue."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 from typing import Callable, TypedDict
 
-from langchain.tools import tool
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tracers.langchain import LangChainTracer
 from langgraph.graph import END, START, StateGraph
@@ -14,11 +13,13 @@ from langsmith import Client, tracing_context
 import pandas as pd
 from typing_extensions import NotRequired
 
-from windpower import features, forecast, store, weather
+from windpower import agent_tools, features, forecast, source_search, store, weather
 
 
 WeatherFetcher = Callable[[datetime], pd.DataFrame]
 PowerPredictor = Callable[[pd.DataFrame], pd.DataFrame]
+WebSearcher = Callable[[str], source_search.SearchReport]
+MAX_DAILY_ISSUES = 29
 
 
 class ForecastState(TypedDict):
@@ -69,6 +70,7 @@ class ForecastAgent:
         cache_dir: Path,
         output_dir: Path,
         weather_fetcher: WeatherFetcher | None = None,
+        web_searcher: WebSearcher | None = None,
     ) -> None:
         if not callable(predictor) or not model_version.strip():
             raise ValueError("a callable trained model and nonempty model version are required")
@@ -79,12 +81,8 @@ class ForecastAgent:
         )
         self.predictor = RunnableLambda(predictor, name="predict_power")
 
-        @tool("fetch_weather_run")
-        def fetch_weather_run(issue_time_utc: str) -> pd.DataFrame:
-            """Fetch the archived weather issue for the configured turbine sites."""
-            return self.fetch_weather(datetime.fromisoformat(issue_time_utc))
-
-        self.weather_tool = fetch_weather_run
+        self.weather_tool = agent_tools.make_weather_tool(self.fetch_weather)
+        self.search_tool = agent_tools.make_search_tool(web_searcher or source_search.search_web)
         graph = StateGraph(ForecastState)
         actions = (
             lambda state: forecast.normalize_issue(state["issue_input"]),
@@ -130,6 +128,29 @@ class ForecastAgent:
             "SUCCESS", run_id, path, state["forecast"], tuple(state["events"]),
             analysis=state["analysis"],
         )
+
+    def research_sources(self, query: str) -> source_search.SearchReport:
+        """Search current public pages without adding results to forecast state."""
+        with tracing_context(enabled=False):
+            return self.search_tool.invoke({"query": query})
+
+    def run_daily(self, first_issue_utc: datetime, last_issue_utc: datetime) -> tuple[AgentResult, ...]:
+        """Run at the same UTC hour each day, stopping at the first failed issue."""
+        first = forecast.normalize_issue(first_issue_utc)
+        last = forecast.normalize_issue(last_issue_utc)
+        seconds = (last - first).total_seconds()
+        if seconds < 0 or seconds % timedelta(days=1).total_seconds():
+            raise ValueError("daily issues must be an inclusive range at one UTC hour")
+        count = int(seconds // timedelta(days=1).total_seconds()) + 1
+        if count > MAX_DAILY_ISSUES:
+            raise ValueError(f"daily replay is limited to {MAX_DAILY_ISSUES} issues")
+        results = []
+        for index in range(count):
+            result = self.run(first + timedelta(days=index))
+            results.append(result)
+            if result.status != "SUCCESS":
+                break
+        return tuple(results)
 
     @staticmethod
     def _route(state: ForecastState) -> str:
