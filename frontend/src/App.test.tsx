@@ -14,9 +14,9 @@ describe('dashboard interactions', () => {
   it('selects a turbine and restores whole-farm metrics', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
-    fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: 'T02' } });
-    expect(screen.getByRole('heading', { name: 'Turbine 02' })).toBeTruthy();
-    expect(screen.getByTestId('scene-state').textContent).toContain('T02');
+    fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: '2' } });
+    expect(screen.getByRole('heading', { name: 'Turbine 2' })).toBeTruthy();
+    expect(screen.getByTestId('scene-state').textContent).toContain('"selected":["2"]');
     fireEvent.click(screen.getByLabelText('Show whole farm'));
     expect(screen.queryByRole('complementary', { name: 'Turbine insight' })).toBeNull();
     expect(screen.getByRole('complementary', { name: 'Farm forecast metrics' })).toBeTruthy();
@@ -30,7 +30,7 @@ describe('dashboard interactions', () => {
     expect(slider.value).toBe('23');
     expect(slider.max).toBe('23');
     fireEvent.click(screen.getByRole('button', { name: 'When is peak power?' }));
-    expect(screen.getByRole('status').textContent).toContain('24-hour demo forecast');
+    expect(screen.getByRole('status').textContent).toContain('24-hour archived forecast');
   });
   it('plays, wraps at the horizon, and stops when scrubbing', async () => {
     render(<App />);
@@ -81,15 +81,29 @@ describe('dashboard interactions', () => {
     render(<App />);
     await screen.findByTestId('scene-state');
     const initialPower = screen.getByTestId('forecast-power').textContent;
-    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-02-01' } });
+    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-02-02' } });
     fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '17' } });
-    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter · night');
-    expect(screen.getByTestId('scene-state').textContent).toContain('2026-02-01T21:00:00.000Z');
+    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
+    expect(screen.getByTestId('scene-state').textContent).toContain('2026-02-02');
     expect(screen.getByTestId('forecast-power').textContent).not.toBe(initialPower);
     fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-07-01' } });
-    expect(screen.getByLabelText('Scene environment').textContent).toContain('summer · night');
+    expect((screen.getByLabelText('Forecast start date') as HTMLInputElement).value).toBe('2026-02-02');
     fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '4' } });
-    expect(screen.getByLabelText('Scene environment').textContent).toContain('summer · day');
-    expect(screen.queryByText(/Shelek/i)).toBeNull();
+    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
+    expect(screen.getByRole('heading', { name: 'The story behind the wind.' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Full February' }));
+    expect(screen.getByText('1–28 Feb · every local hour')).toBeTruthy();
+  });
+  it('keeps analytics below the assistant and exposes all February hours by scrolling', () => {
+    render(<App />);
+    const assistant = screen.getByLabelText('Ask the demo forecast assistant');
+    const analytics = screen.getByRole('region', { name: 'Hourly forecast readings' });
+    expect(assistant.compareDocumentPosition(analytics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Full February' }));
+    expect(analytics.querySelectorAll('tbody tr')).toHaveLength(672);
+    expect(analytics.querySelector('th')?.textContent).toBe('Local time');
+    expect(analytics.textContent).toContain('Δ 24 hours');
+    fireEvent.click(screen.getByRole('link', { name: 'Analytics' }));
+    expect(window.location.hash).toBe('#analytics');
   });
 });

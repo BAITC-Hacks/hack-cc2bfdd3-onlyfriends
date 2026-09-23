@@ -7,9 +7,8 @@ import { surfacePlacement } from './placement';
 import { sceneConfig } from './config';
 import { TurbineAsset } from './ModelAsset';
 import { Icon } from '../components/Icon';
-import type { TimeOfDay } from '../forecast/environment';
 
-function ProceduralTurbine({ windSpeed, motion }: { windSpeed: number; motion: boolean }) {
+export function ProceduralTurbine({ windSpeed, motion }: { windSpeed: number; motion: boolean }) {
   const rotor = useRef<Group>(null);
   useFrame((_, dt) => { if (rotor.current && motion) rotor.current.rotation.z -= Math.min(dt, 0.05) * windSpeed * sceneConfig.bladeSpeed; });
   return <group>
@@ -22,8 +21,8 @@ function ProceduralTurbine({ windSpeed, motion }: { windSpeed: number; motion: b
   </group>;
 }
 
-interface Props { turbine: TurbineData; reading: Reading; selected: boolean; onSelect: (id: string) => void; weather: boolean; motion: boolean; suppliedModel: boolean; timeOfDay: TimeOfDay }
-export function Turbine({ turbine, reading, selected, onSelect, weather, motion, suppliedModel, timeOfDay }: Props) {
+interface Props { turbine: TurbineData; reading: Reading; selected: boolean; onSelect: (id: string) => void; weather: boolean; motion: boolean; suppliedModel: boolean }
+export function Turbine({ turbine, reading, selected, onSelect, weather, motion, suppliedModel }: Props) {
   const [hovered, setHovered] = useState(false);
   const placement = surfacePlacement(turbine.lat, turbine.lon);
   const url = suppliedModel ? '/models/supplied-turbine.glb' : sceneConfig.turbineModel;
@@ -35,6 +34,6 @@ export function Turbine({ turbine, reading, selected, onSelect, weather, motion,
       {url ? <Suspense fallback={<ProceduralTurbine windSpeed={rotorSpeed} motion={motion} />}><TurbineAsset url={url} windSpeed={rotorSpeed} motion={motion} /></Suspense> : <ProceduralTurbine windSpeed={rotorSpeed} motion={motion} />}
       {selected && <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.046, 0]}><ringGeometry args={[0.16, 0.18, 40]} /><meshBasicMaterial color="#c9f5ac" side={2} /></mesh>}
     </group>
-    {weather && <Html position={[0, sceneConfig.weatherHeight, 0]} center occlude zIndexRange={[20, 0]}><button className={`weather-marker ${selected ? 'active' : ''}`} onClick={() => onSelect(turbine.id)} aria-label={`Select ${turbine.name}, wind ${reading.windSpeed.toFixed(1)} meters per second`}><Icon name={timeOfDay === 'night' ? reading.condition === 'cloud' ? 'cloudMoon' : 'moon' : reading.condition === 'sun' ? 'sun' : 'weather'} size={14} /><span>{reading.windSpeed.toFixed(1)}<small>m/s</small></span></button></Html>}
+    {weather && <Html position={[0, sceneConfig.weatherHeight, 0]} center occlude zIndexRange={[20, 0]}><button className={`weather-marker ${selected ? 'active' : ''}`} onClick={() => onSelect(turbine.id)} aria-label={`Select ${turbine.name}, wind ${reading.windSpeed.toFixed(1)} meters per second`}><Icon name="wind" size={14} /><span>{reading.windSpeed.toFixed(1)}<small>m/s</small></span></button></Html>}
   </group>;
 }
