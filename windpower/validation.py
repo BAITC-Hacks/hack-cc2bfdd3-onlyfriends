@@ -80,3 +80,15 @@ def score(actual: pd.Series, forecast: np.ndarray, lead: pd.Series) -> dict:
         "mae_h25_48": float(np.mean(np.abs(error[second]))) if second.any() else float("nan"),
         "n": len(error),
     }
+
+
+def daily_scores(valid: pd.DataFrame, forecast: np.ndarray, month: str,
+                 candidate: str) -> list[dict]:
+    """Persist paired validation errors by local issue day for uncertainty checks."""
+    dates = pd.to_datetime(valid.issue_time_utc, utc=True).dt.tz_convert("Asia/Almaty").dt.date
+    rows = []
+    for day, positions in valid.groupby(dates).indices.items():
+        group = valid.iloc[positions]
+        rows.append({"month": month, "issue_date": day.isoformat(), "candidate": candidate,
+                     **score(group.power, forecast[positions], group.lead_hour)})
+    return rows

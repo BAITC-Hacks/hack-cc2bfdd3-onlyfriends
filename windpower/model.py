@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
 from windpower.features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS, WEATHER_FEATURE_COLUMNS, make_features
-from windpower.validation import BLENDS, CUTOFF, VALIDATION_MONTHS, choose_candidate, rolling_folds, score
+from windpower.validation import BLENDS, CUTOFF, VALIDATION_MONTHS, choose_candidate, daily_scores, rolling_folds, score
 
 
 ALGORITHM_VERSION = "windpower-weather-v2"
@@ -174,6 +174,7 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     safe_history = history.loc[pd.to_datetime(history.valid_time_utc, utc=True) < cutoff].copy()
     scores = []
     turbine_scores = []
+    issue_day_scores = []
     for month, (train, valid) in zip(VALIDATION_MONTHS, rolling_folds(safe_examples, minimum_coverage=0.8)):
         start = pd.Timestamp(f"{month}-01", tz="Asia/Almaty").tz_convert("UTC")
         past_history = safe_history.loc[safe_history.valid_time_utc < start]
@@ -184,6 +185,7 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
             fitted = _fit_candidate(name, train, past_history)
             forecast = _predict_candidate(name, fitted, valid)
             forecasts[name] = forecast
+            issue_day_scores.extend(daily_scores(valid, forecast, month, name))
             scores.append({"month": month, "candidate": name, "issue_days": valid.attrs["issue_days"],
                            "expected_issue_days": valid.attrs["expected_issue_days"],
                            "issue_day_coverage": valid.attrs["issue_day_coverage"],
@@ -193,6 +195,7 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
                 turbine_scores.append({"month": month, "candidate": name, "turbine_id": turbine_id, **score(group.power, forecast[positions], group.lead_hour)})
         for blend_name, direct_name in BLENDS.items():
             blended = 0.5 * forecasts[direct_name] + 0.5 * forecasts["two_stage"]
+            issue_day_scores.extend(daily_scores(valid, blended, month, blend_name))
             scores.append({"month": month, "candidate": blend_name, "issue_days": valid.attrs["issue_days"],
                            "expected_issue_days": valid.attrs["expected_issue_days"],
                            "issue_day_coverage": valid.attrs["issue_day_coverage"],
@@ -204,6 +207,7 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     metrics = pd.DataFrame(scores)
     metrics.to_csv(output_dir / "validation_metrics.csv", index=False)
     pd.DataFrame(turbine_scores).to_csv(output_dir / "validation_metrics_by_turbine.csv", index=False)
+    pd.DataFrame(issue_day_scores).to_csv(output_dir / "validation_metrics_by_issue_day.csv", index=False)
     winner = choose_candidate(metrics)
     bundle = fit_at_cutoff(winner, examples, history, cutoff, output_dir)
     early_scores = metrics.loc[metrics.month < "2026-01"].copy()

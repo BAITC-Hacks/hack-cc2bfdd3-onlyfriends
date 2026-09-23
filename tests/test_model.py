@@ -5,6 +5,7 @@ import joblib
 
 from windpower import model
 from windpower.features import FEATURE_COLUMNS
+from windpower.validation import daily_scores
 from tests.test_features import weather_rows
 
 
@@ -192,3 +193,16 @@ def test_weather_model_needs_consistent_gain_over_base_direct():
     ])
 
     assert model.choose_candidate(scores) == "direct_d6_l10"
+
+
+def test_daily_scores_group_by_local_issue_and_retain_pairing_key():
+    frame = pd.DataFrame({
+        "issue_time_utc": pd.to_datetime(["2025-10-01T18:00Z", "2025-10-02T18:00Z"]),
+        "power": [0.2, 0.8], "lead_hour": [1, 30],
+    })
+
+    rows = daily_scores(frame, np.array([0.3, 0.6]), "2025-10", "direct_d4_l10")
+
+    assert [row["issue_date"] for row in rows] == ["2025-10-01", "2025-10-02"]
+    assert [row["mae"] for row in rows] == pytest.approx([0.1, 0.2])
+    assert all(row["candidate"] == "direct_d4_l10" for row in rows)
