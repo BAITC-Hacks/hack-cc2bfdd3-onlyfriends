@@ -1,0 +1,80 @@
+{
+  "raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
+  "weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0",
+  "weather_issues_loaded": 682,
+  "weather_issues_missing": [
+    "2025-08-05",
+    "2025-08-06",
+    "2025-08-07",
+    "2025-08-08",
+    "2025-08-09",
+    "2025-08-10"
+  ],
+  "examples": 61544,
+  "history_rows": 48645,
+  "inner_months": [
+    "2025-07",
+    "2025-08",
+    "2025-09"
+  ],
+  "outer_months": [
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01"
+  ],
+  "winners": {
+    "full": "incumbent",
+    "early": "incumbent"
+  },
+  "mean_monthly_mae": {
+    "incumbent": 0.15351415056007503,
+    "catboost": 0.15458785141107803,
+    "mlp": 0.167045981271299,
+    "extra_trees": 0.16920783624150473,
+    "random_forest": 0.16990153412594527,
+    "hist_gradient_boosting": 0.17269537592049405,
+    "ridge": 0.17565620617916047,
+    "elastic_net": 0.17705428014765812,
+    "isotonic": 0.1829582110770905,
+    "naive": 0.32313883864142934
+  },
+  "best_params": {
+    "naive": {
+      "window_days": 30
+    },
+    "isotonic": {
+      "wind_column": "wind_speed_100m"
+    },
+    "ridge": {
+      "model__alpha": 100.0
+    },
+    "elastic_net": {
+      "model__alpha": 0.001,
+      "model__l1_ratio": 0.7
+    },
+    "random_forest": {
+      "model__max_depth": 10,
+      "model__min_samples_leaf": 30
+    },
+    "extra_trees": {
+      "model__max_depth": 10,
+      "model__min_samples_leaf": 10
+    },
+    "hist_gradient_boosting": {
+      "model__l2_regularization": 1.0,
+      "model__max_leaf_nodes": 15
+    },
+    "catboost": {
+      "model__depth": 4,
+      "model__l2_leaf_reg": 10
+    },
+    "mlp": {
+      "model__alpha": 0.01,
+      "model__hidden_layer_sizes": [
+        32
+      ]
+    }
+  },
+  "rule": "lower average MAE and wins >=3/4 months vs incumbent (early >=2/3)"
+}

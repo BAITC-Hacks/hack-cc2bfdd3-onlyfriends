@@ -1,0 +1,14 @@
+{
+  "candidate": "weather_d6_l10",
+  "months": [
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01"
+  ],
+  "pooled_mean_monthly_mae": 0.15351415056007497,
+  "separate_mean_monthly_mae": 0.1543614106040349,
+  "separate_winning_months": 0,
+  "raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
+  "weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0"
+}

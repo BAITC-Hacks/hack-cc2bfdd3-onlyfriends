@@ -4,7 +4,8 @@ from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 
 from windpower.features import WEATHER_FEATURE_COLUMNS
-from windpower.model_search import clipped_neg_mae, inner_cv_indices, search_examples
+from windpower.model_search import (choose_search_winner, clipped_neg_mae,
+                                    inner_cv_indices, search_examples)
 from windpower.search_estimators import IsotonicWindRegressor, SeasonalMeanRegressor, candidate_grids
 
 
@@ -96,3 +97,19 @@ def test_each_family_fits_small_forecast_frame():
             params["model__batch_size"] = 20
         fitted = clone(estimator).set_params(**params).fit(frame, target)
         assert np.isfinite(fitted.predict(frame)).all(), name
+
+
+def test_search_requires_three_monthly_wins_over_incumbent():
+    months = ["2025-10", "2025-11", "2025-12", "2026-01"]
+    frame = pd.DataFrame([
+        {"month": month, "family": family, "mae": error}
+        for family, errors in {
+            "incumbent": [0.2] * 4,
+            "lucky": [0.01, 0.21, 0.21, 0.01],
+            "stable": [0.19, 0.18, 0.19, 0.21],
+        }.items()
+        for month, error in zip(months, errors)
+    ])
+
+    assert choose_search_winner(frame) == "stable"
+    assert choose_search_winner(frame[frame.month < "2026-01"]) == "stable"

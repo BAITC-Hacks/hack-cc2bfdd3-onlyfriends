@@ -1,0 +1,110 @@
+[
+  {
+    "candidate": "naive",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.1696246880813543,
+    "lower_95": 0.15215956966181154,
+    "upper_95": 0.1870721394790905,
+    "winning_days": 5,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "isotonic",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.029444060517015477,
+    "lower_95": 0.02318549964550338,
+    "upper_95": 0.03566483632908576,
+    "winning_days": 26,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "ridge",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.022142055619085436,
+    "lower_95": 0.016946136768725664,
+    "upper_95": 0.02735893925457545,
+    "winning_days": 21,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "elastic_net",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.023540129587583083,
+    "lower_95": 0.018284999720953404,
+    "upper_95": 0.028786660175361082,
+    "winning_days": 21,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "random_forest",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.016387383565870224,
+    "lower_95": 0.012345946449063056,
+    "upper_95": 0.020286727634187814,
+    "winning_days": 29,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "extra_trees",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.015693685681429686,
+    "lower_95": 0.011520470756945404,
+    "upper_95": 0.019761588689435314,
+    "winning_days": 29,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "hist_gradient_boosting",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.019181225360419035,
+    "lower_95": 0.014471677003803153,
+    "upper_95": 0.024195596693218697,
+    "winning_days": 32,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "catboost",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.0010737008510030071,
+    "lower_95": -0.00046930432257389303,
+    "upper_95": 0.002664757862374419,
+    "winning_days": 57,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "mlp",
+    "reference": "incumbent",
+    "mean_delta_mae": 0.013531830711223953,
+    "lower_95": 0.008948902040548908,
+    "upper_95": 0.018109964326110672,
+    "winning_days": 35,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  }
+]
