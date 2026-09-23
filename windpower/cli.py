@@ -7,7 +7,7 @@ from pathlib import Path
 import joblib
 
 from windpower.workflow import (
-    ARCHIVE_START, TRAINING_END, backtest, forecast_issue, run_agent, train_pipeline,
+    ARCHIVE_START, TRAINING_END, backtest, forecast_issue, load_bundle_for_issue, run_agent, train_pipeline,
 )
 
 
@@ -40,10 +40,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not model_path.exists():
         parser.error(f"model missing: {model_path}; run train first")
-    bundle = joblib.load(model_path)
     if arguments.command == "forecast":
+        bundle = load_bundle_for_issue(arguments.issue, artifacts)
         print(forecast_issue(arguments.issue, bundle, artifacts))
     else:
-        result = backtest(arguments.start, arguments.end, bundle, artifacts)
+        bundle = joblib.load(model_path)
+        early = load_bundle_for_issue(arguments.start, artifacts) if arguments.start <= date(2026, 1, 31) else None
+        result = backtest(arguments.start, arguments.end, bundle, artifacts, early_bundle=early)
         print(f"{len(result)} turbine-hour forecasts saved in {artifacts}")
     return 0

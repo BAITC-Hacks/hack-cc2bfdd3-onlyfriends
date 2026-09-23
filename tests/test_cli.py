@@ -9,7 +9,8 @@ import joblib
 
 from windpower import cli
 from windpower.weather import VARIABLES
-from windpower.workflow import raw_digest, raw_paths
+from windpower.workflow import raw_digest, raw_paths, weather_cache_digest, station_total
+from windpower.model import ALGORITHM_VERSION
 
 
 class ConstantPredictor:
@@ -46,7 +47,23 @@ class ArchiveSession:
 
 
 def bundle():
-    return {"candidate": "direct", "model": ConstantPredictor(), "model_version": "test-model"}
+    return {"candidate": "direct", "model": ConstantPredictor(), "model_version": "test-model",
+            "trained_through_utc": "2026-01-30T18:00:00+00:00"}
+
+
+def test_rejects_model_with_future_training_labels(tmp_path):
+    future = bundle() | {"trained_through_utc": "2026-01-31T18:00:00+00:00"}
+    with pytest.raises(ValueError, match="trained after issue"):
+        cli.forecast_issue(date(2026, 1, 31), future, tmp_path, session=ArchiveSession())
+
+
+def test_backtest_uses_early_bundle_for_first_issue(tmp_path):
+    full = bundle() | {"trained_through_utc": "2026-01-31T18:00:00+00:00", "model_version": "full"}
+    early = bundle() | {"model_version": "early"}
+    result = cli.backtest(date(2026, 1, 31), date(2026, 2, 1), full, tmp_path,
+                          session=ArchiveSession(), early_bundle=early)
+    versions = result.groupby("issue_time_utc").model_version.first().tolist()
+    assert versions == ["early", "full"]
 
 
 def test_backtest_writes_29_issues_and_48_hours_each(tmp_path):
@@ -59,6 +76,11 @@ def test_backtest_writes_29_issues_and_48_hours_each(tmp_path):
     latest = pd.read_csv(tmp_path / "february_latest_forecast.csv")
     assert len(latest) == 28 * 24 * 2
     assert not latest.duplicated(["valid_time_utc", "turbine_id"]).any()
+    station = pd.read_csv(tmp_path / "backtest_station_2026-01-31_2026-02-28.csv")
+    assert len(station) == 29 * 48
+    assert station.unit.eq("one_turbine_nameplate_equivalent").all()
+    first = result.loc[result.issue_time_utc == result.issue_time_utc.iloc[0]]
+    np.testing.assert_allclose(station.predicted_power.iloc[:48], station_total(first).predicted_power)
 
 
 def test_repeated_issue_is_idempotent(tmp_path):
@@ -114,7 +136,16 @@ def test_agent_run_reuses_fresh_model_and_records_workflow(tmp_path):
     (artifacts / "model").mkdir(parents=True)
     stored = bundle()
     stored["raw_sha256"] = raw_digest(raw_paths(raw_dir))
+    stored["algorithm_version"] = ALGORITHM_VERSION
+    stored["weather_archive_sha256"] = weather_cache_digest(artifacts / "weather", date(2025, 1, 1), date(2025, 1, 1))
     joblib.dump(stored, artifacts / "model" / "model.joblib")
+    version_dir = artifacts / "model" / "versions"
+    version_dir.mkdir()
+    joblib.dump(stored, version_dir / "test-model.joblib")
+    (artifacts / "model" / "early_model_metadata.json").write_text(json.dumps({"model_version": "test-model"}))
+    (artifacts / "model" / "training_manifest.json").write_text(json.dumps({
+        "weather_start": "2025-01-01", "weather_end": "2025-01-01", "weather_issues_failed": [],
+    }))
 
     result = cli.run_agent(date(2026, 1, 31), raw_dir, artifacts, session=ArchiveSession())
 

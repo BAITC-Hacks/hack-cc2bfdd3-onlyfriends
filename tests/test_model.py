@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from windpower import model
 from windpower.features import FEATURE_COLUMNS
@@ -27,6 +28,15 @@ def test_validation_excludes_issues_before_fold_start():
     _, valid = next(model.rolling_folds(examples, ["2026-01"]))
 
     assert valid["valid_time_utc"].tolist() == [pd.Timestamp("2026-01-03 00:00:00+00:00")]
+
+
+def test_sparse_validation_month_is_rejected():
+    examples = pd.DataFrame({
+        "valid_time_utc": pd.to_datetime(["2025-09-15", "2025-10-02"], utc=True),
+        "issue_time_utc": pd.to_datetime(["2025-09-14", "2025-10-01"], utc=True),
+    })
+    with pytest.raises(ValueError, match="archive coverage"):
+        list(model.rolling_folds(examples, ["2025-10"], minimum_coverage=0.8))
 
 
 def test_predictions_clipped_and_ordered():
