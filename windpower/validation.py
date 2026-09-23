@@ -59,7 +59,7 @@ def choose_candidate(scores: pd.DataFrame) -> str:
     control = str(average.loc[base_direct].sort_values("mean_mae").index[0]) if base_direct else None
     if control:
         eligible = [name for name in eligible if not name.startswith("weather_")
-                    or name in BLENDS or wins(name, control)]
+                    or wins(name, control)]
     direct = [name for name in eligible if name.startswith(("direct_", "weather_")) and name not in BLENDS]
     strongest_direct = str(average.loc[direct].sort_values("mean_mae").index[0]) if direct else None
     if strongest_direct:

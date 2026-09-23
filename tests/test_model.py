@@ -195,6 +195,21 @@ def test_weather_model_needs_consistent_gain_over_base_direct():
     assert model.choose_candidate(scores) == "direct_d6_l10"
 
 
+def test_weather_blend_also_needs_consistent_gain_over_base_direct():
+    scores = pd.DataFrame([
+        {"candidate": candidate, "month": month, "mae": error, "rmse": error + 0.02}
+        for candidate, errors in {
+            "baseline": [0.4] * 4,
+            "direct_d6_l10": [0.2] * 4,
+            "weather_d6_l10": [0.19, 0.19, 0.19, 0.22],
+            "weather_blend_50": [0.201, 0.0, 0.0, 0.21],
+        }.items()
+        for month, error in zip(model.VALIDATION_MONTHS, errors)
+    ])
+
+    assert model.choose_candidate(scores) == "weather_d6_l10"
+
+
 def test_daily_scores_group_by_local_issue_and_retain_pairing_key():
     frame = pd.DataFrame({
         "issue_time_utc": pd.to_datetime(["2025-10-01T18:00Z", "2025-10-02T18:00Z"]),
