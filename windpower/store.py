@@ -15,12 +15,27 @@ def _frame_hash(frame: pd.DataFrame) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def weather_rows(frame: pd.DataFrame) -> list[dict]:
+    """Canonical weather values used for both storage and live change checks."""
+    return [
+        {"turbine_id": str(row.turbine_id), "lead_hour": int(row.lead_hour),
+         "valid_time_utc": pd.Timestamp(row.valid_time_utc).isoformat(),
+         "wind_speed_10m": float(row.wind_speed_10m),
+         "wind_speed_100m": float(row.wind_speed_100m),
+         "wind_direction_100m": float(row.wind_direction_100m),
+         "temperature_2m": float(row.temperature_2m),
+         "surface_pressure": float(row.surface_pressure)}
+        for row in frame.sort_values(["lead_hour", "turbine_id"]).itertuples(index=False)
+    ]
+
+
 def save_run(
     issue_utc: pd.Timestamp,
     weather: pd.DataFrame,
     forecast: pd.DataFrame,
     model_version: str,
     analysis: dict[str, dict[str, float | int]],
+    operations: dict,
     events: list[dict[str, str]],
     output_dir: Path,
     mode: str = "historical",
@@ -31,7 +46,7 @@ def save_run(
     forecast_hash = _frame_hash(forecast)
     run_time = pd.Timestamp(weather["run_time_utc"].iloc[0]).isoformat()
     identity = {
-        "schema_version": 2,
+        "schema_version": 3,
         "mode": mode,
         "issue_time_utc": pd.Timestamp(issue_utc).isoformat(),
         "target_start_utc": pd.Timestamp(target_start_utc or issue_utc).isoformat(),
@@ -64,17 +79,9 @@ def save_run(
         }
         for row in forecast.itertuples(index=False)
     ]
-    weather_rows = [
-        {"turbine_id": str(row.turbine_id), "lead_hour": int(row.lead_hour),
-         "valid_time_utc": pd.Timestamp(row.valid_time_utc).isoformat(),
-         "wind_speed_10m": float(row.wind_speed_10m),
-         "wind_speed_100m": float(row.wind_speed_100m),
-         "wind_direction_100m": float(row.wind_direction_100m),
-         "temperature_2m": float(row.temperature_2m),
-         "surface_pressure": float(row.surface_pressure)}
-        for row in weather.itertuples(index=False)
-    ]
-    artifact = {"metadata": dict(metadata), "weather": weather_rows, "forecast": rows, "analysis": analysis, "events": events}
+    weather_values = weather_rows(weather)
+    artifact = {"metadata": dict(metadata), "weather": weather_values, "forecast": rows,
+                "analysis": analysis, "operations": operations, "events": events}
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{run_id}.json"
@@ -82,8 +89,8 @@ def save_run(
         old_metadata = dict(existing.get("metadata", {}))
         old_metadata.pop("created_at_utc", None)
         return (old_metadata == metadata and existing.get("forecast") == rows
-                and existing.get("weather") == weather_rows
-                and existing.get("analysis") == analysis)
+                and existing.get("weather") == weather_values
+                and existing.get("analysis") == analysis and existing.get("operations") == operations)
     if path.exists():
         existing = json.loads(path.read_text(encoding="utf-8"))
         if not matches(existing):

@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 import { fixture } from './forecast/testFixture';
 
 vi.mock('./scene/PlanetScene', () => ({ default: ({ selected, hour, zoom, environment }: { selected: string[]; hour: { at: string }; zoom: number; environment: { season: string } }) => <div data-testid="scene-state">{selected.join(',')}/{hour.at}/{zoom}/{environment.season}</div> }));
 beforeEach(() => {
+  window.history.replaceState(null, '', '#overview');
   Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
   vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => ({ ok: true, json: async () => fixture(url.includes('mode=live') ? 'live' : 'historical') })));
 });
@@ -36,6 +37,30 @@ describe('forecast dashboard', () => {
     expect(screen.getByRole('main').getAttribute('data-season')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Reset planet view' }));
     expect(screen.getByRole('button', { name: '1×' }).getAttribute('aria-pressed')).toBe('true');
+  });
+  it('shows operational signals, agent audit, and opens the flagged hour', async () => {
+    window.history.replaceState(null, '', '#operations');
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Forecast intelligence' });
+    expect(screen.getByText('51.0%')).toBeTruthy();
+    expect(screen.getByText('No earlier comparable retrieval with overlapping hours is saved yet.')).toBeTruthy();
+    expect(screen.getByText('assess operations')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /7h low-output window/ }));
+    expect(window.location.hash).toBe('#overview');
+    expect(await screen.findByTestId('scene-state')).toBeTruthy();
+  });
+  it('checks live weather again after fifteen minutes while the page is visible', async () => {
+    Object.defineProperty(window.document, 'visibilityState', { configurable: true, value: 'visible' });
+    const intervals = vi.spyOn(window, 'setInterval');
+    try {
+      render(<App />);
+      await screen.findByTestId('scene-state');
+      const initialCalls = vi.mocked(fetch).mock.calls.length;
+      const poll = intervals.mock.calls.find(([, delay]) => delay === 15 * 60 * 1000)?.[0] as (() => void) | undefined;
+      expect(poll).toBeTruthy();
+      await act(async () => { poll?.(); await Promise.resolve(); });
+      expect(vi.mocked(fetch).mock.calls.length).toBe(initialCalls + 1);
+    } finally { intervals.mockRestore(); }
   });
   it('shows model-unavailable status without a forecast or false power', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error_code: 'MODEL_UNAVAILABLE', message: 'Trained power model file is missing.' }) }));

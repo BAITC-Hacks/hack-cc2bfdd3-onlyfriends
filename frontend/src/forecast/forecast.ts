@@ -4,15 +4,34 @@ export interface Reading {
   direction: number; pressure: number; power: number;
 }
 export interface ForecastHour { at: string; readings: Reading[] }
+export interface OperationSignal {
+  kind: 'ramp_up' | 'ramp_down' | 'low_output';
+  start_lead_hour: number; end_lead_hour: number; start_utc: string; end_utc: string;
+  delta?: number; power_before?: number; power_after?: number;
+  hours?: number; mean_power?: number;
+}
+export interface OperationsSummary {
+  unit: string; mean_24h: number; mean_48h: number; peak_power: number;
+  peak_lead_hour: number; peak_time_utc: string;
+  thresholds: { ramp_window_hours: number; ramp_delta: number; low_output_at_or_below: number; low_output_min_hours: number };
+  signals: OperationSignal[];
+}
+export interface RevisionSummary {
+  previous_run_id: string; previous_issue_time_utc: string; overlap_hours: number;
+  mean_absolute_change: number; largest_change: number; largest_change_time_utc: string;
+  weather_changed: boolean; model_changed: boolean;
+}
+export interface ForecastEvent { step: string; status: 'SUCCESS' | 'FAILED'; error_code?: string }
 export interface ForecastDocument {
   metadata: {
     mode: 'historical' | 'live'; issue_time_utc: string; target_start_utc: string; run_time_utc: string | null;
     retrieved_at_utc: string | null; weather_source: string; weather_model: string;
     model_version: string; run_id: string; weather_sha256: string; created_at_utc: string;
-    power_unit: string; warnings?: string[];
+    power_unit: string; availability_rule?: string | null; warnings?: string[];
   };
   turbines: Turbine[]; hours: ForecastHour[];
   analysis: Record<string, Record<string, number>>;
+  operations: OperationsSummary; revision: RevisionSummary | null; events: ForecastEvent[];
 }
 type RawPoint = { turbine_id: string; lead_hour: number; valid_time_utc: string };
 type RawWeather = RawPoint & { wind_speed_10m: number; wind_speed_100m: number; wind_direction_100m: number; temperature_2m: number; surface_pressure: number };
@@ -22,7 +41,7 @@ function pointKey(point: RawPoint): string { return `${point.turbine_id}/${point
 function finite(value: number): boolean { return typeof value === 'number' && Number.isFinite(value); }
 
 export function parseForecast(raw: RawDocument): ForecastDocument {
-  if (!raw?.metadata || raw.sites?.length !== 2 || raw.weather?.length !== 96 || raw.forecast?.length !== 96) throw new Error('Forecast response is incomplete.');
+  if (!raw?.metadata || raw.sites?.length !== 2 || raw.weather?.length !== 96 || raw.forecast?.length !== 96 || !raw.operations || !Array.isArray(raw.operations.signals) || !Array.isArray(raw.events)) throw new Error('Forecast response is incomplete.');
   if (!['historical', 'live'].includes(raw.metadata.mode) || !raw.metadata.model_version || !raw.metadata.weather_source || !Number.isFinite(Date.parse(raw.metadata.target_start_utc))) throw new Error('Forecast provenance is incomplete.');
   const turbines = raw.sites.map(site => ({ id: site.id, name: site.name, lat: site.latitude, lon: site.longitude }));
   if (new Set(turbines.map(t => t.id)).size !== 2 || turbines.some(t => !finite(t.lat) || !finite(t.lon))) throw new Error('Turbine locations are invalid.');
@@ -44,7 +63,8 @@ export function parseForecast(raw: RawDocument): ForecastDocument {
   }
   const hours = Array.from({ length: 48 }, (_, index) => byLead.get(index + 1));
   if (hours.some((hour, index) => !hour || hour.readings.length !== 2 || Date.parse(hour.at) !== Date.parse(raw.metadata.target_start_utc) + (index + 1) * 3600000)) throw new Error('Forecast must contain 48 aligned hours for both turbines.');
-  return { metadata: raw.metadata, turbines, hours: hours as ForecastHour[], analysis: raw.analysis };
+  return { metadata: raw.metadata, turbines, hours: hours as ForecastHour[], analysis: raw.analysis,
+    operations: raw.operations, revision: raw.revision ?? null, events: raw.events };
 }
 
 export async function fetchForecast(mode: 'historical' | 'live', issue?: string, start?: string): Promise<ForecastDocument> {

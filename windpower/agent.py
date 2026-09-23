@@ -13,7 +13,7 @@ from langsmith import Client, tracing_context
 import pandas as pd
 from typing_extensions import NotRequired
 
-from windpower import agent_tools, features, forecast, source_search, store
+from windpower import agent_tools, features, forecast, operations, source_search, store
 from windpower.weather_provider import OpenMeteoWeatherProvider, WeatherProvider
 
 
@@ -27,6 +27,7 @@ class ForecastState(TypedDict):
     issue_input: datetime
     mode: str
     target_start_input: NotRequired[datetime]
+    preloaded_weather: NotRequired[pd.DataFrame]
     events: list[dict[str, str]]
     issue: NotRequired[datetime]
     weather: NotRequired[pd.DataFrame]
@@ -35,6 +36,7 @@ class ForecastState(TypedDict):
     prediction: NotRequired[pd.DataFrame]
     forecast: NotRequired[pd.DataFrame]
     analysis: NotRequired[dict[str, dict[str, float | int]]]
+    operations: NotRequired[dict]
     saved: NotRequired[tuple[str, Path]]
     error_code: NotRequired[str]
     error_message: NotRequired[str]
@@ -50,6 +52,7 @@ class AgentResult:
     error_code: str | None = None
     error_message: str | None = None
     analysis: dict[str, dict[str, float | int]] | None = None
+    operations: dict | None = None
 
 
 class ForecastAgent:
@@ -63,6 +66,7 @@ class ForecastAgent:
         ("predict_power", "MODEL_ERROR", "prediction"),
         ("validate_forecast", "INVALID_FORECAST", "forecast"),
         ("analyze_forecast", "ANALYSIS_ERROR", "analysis"),
+        ("assess_operations", "ANALYSIS_ERROR", "operations"),
         ("save_forecast", "SAVE_ERROR", "saved"),
     )
 
@@ -97,6 +101,7 @@ class ForecastAgent:
             lambda state: self.predictor.invoke(state["features"]),
             lambda state: forecast.validate_prediction(state["prediction"], state["checked_weather"]),
             lambda state: forecast.analyze_prediction(state["forecast"]),
+            lambda state: operations.assess_operations(state["forecast"]),
             self._save,
         )
         for (name, code, output), action in zip(self.STEPS, actions):
@@ -110,7 +115,8 @@ class ForecastAgent:
         self.graph = graph.compile()
 
     def run(self, issue_utc: datetime, mode: str = "historical",
-            target_start_utc: datetime | None = None) -> AgentResult:
+            target_start_utc: datetime | None = None,
+            preloaded_weather: pd.DataFrame | None = None) -> AgentResult:
         """Return a saved forecast or a classified failure with completed steps."""
         config = {"recursion_limit": len(self.STEPS) + 3}
         tracing = os.getenv("LANGSMITH_TRACING", "").lower() == "true"
@@ -122,9 +128,11 @@ class ForecastAgent:
             ]
         # Suppress ambient tracing, which could publish raw graph state. The explicit
         # tracer above uses a client that removes inputs, outputs, and metadata.
+        initial = {"issue_input": issue_utc, "mode": mode, "target_start_input": target_start_utc, "events": []}
+        if preloaded_weather is not None:
+            initial["preloaded_weather"] = preloaded_weather
         with tracing_context(enabled=False):
-            state = self.graph.invoke({"issue_input": issue_utc, "mode": mode,
-                                       "target_start_input": target_start_utc, "events": []}, config=config)
+            state = self.graph.invoke(initial, config=config)
         if "error_code" in state:
             return AgentResult(
                 "FAILED", None, None, None, tuple(state["events"]),
@@ -133,7 +141,7 @@ class ForecastAgent:
         run_id, path = state["saved"]
         return AgentResult(
             "SUCCESS", run_id, path, state["forecast"], tuple(state["events"]),
-            analysis=state["analysis"],
+            analysis=state["analysis"], operations=state["operations"],
         )
 
     def research_sources(self, query: str) -> source_search.SearchReport:
@@ -142,6 +150,8 @@ class ForecastAgent:
             return self.search_tool.invoke({"query": query})
 
     def _fetch_weather(self, state: ForecastState) -> pd.DataFrame:
+        if "preloaded_weather" in state:
+            return state["preloaded_weather"]
         if state["mode"] == "historical":
             return self.weather_tool.invoke({"issue_time_utc": state["issue"].isoformat()})
         if state["mode"] == "live":
@@ -195,6 +205,6 @@ class ForecastAgent:
         events = [*state["events"], {"step": "save_forecast", "status": "SUCCESS"}]
         return store.save_run(
             pd.Timestamp(state["issue"]), state["checked_weather"], state["forecast"],
-            self.model_version, state["analysis"], events, self.output_dir, state["mode"],
+            self.model_version, state["analysis"], state["operations"], events, self.output_dir, state["mode"],
             state.get("target_start_input"),
         )

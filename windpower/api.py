@@ -7,16 +7,20 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pandas as pd
+
 from windpower.agent import ForecastAgent
 from windpower.forecast_qa import ForecastQuestionError, answer_forecast_question, load_forecast_run
 from windpower.model_loader import ModelUnavailable, load_predictor
+from windpower.operations import compare_runs, previous_comparable_run
 from windpower.regional_weather import fetch_regional_context
 from windpower.weather import SITES
 
 
 def forecast_document(mode: str, issue: datetime, model_path: Path,
                       cache_dir: Path, output_dir: Path,
-                      target_start: datetime | None = None) -> tuple[int, dict]:
+                      target_start: datetime | None = None,
+                      weather_snapshot: pd.DataFrame | None = None) -> tuple[int, dict]:
     """Run a real forecast and return the validated artifact as one UI document."""
     if mode not in {"historical", "live"}:
         return 400, {"status": "FAILED", "error_code": "INVALID_REQUEST", "message": "mode must be historical or live"}
@@ -25,7 +29,8 @@ def forecast_document(mode: str, issue: datetime, model_path: Path,
     except ModelUnavailable as error:
         return 503, {"status": "FAILED", "error_code": "MODEL_UNAVAILABLE", "message": str(error)}
     agent = ForecastAgent(predictor, version, cache_dir, output_dir)
-    result = agent.run(issue, mode=mode, target_start_utc=target_start)
+    result = agent.run(issue, mode=mode, target_start_utc=target_start,
+                       preloaded_weather=weather_snapshot)
     if result.status != "SUCCESS":
         code = "WEATHER_UNAVAILABLE" if result.error_code == "WEATHER_ERROR" else result.error_code
         return 503, {"status": "FAILED", "error_code": code, "message": result.error_message,
@@ -36,6 +41,8 @@ def forecast_document(mode: str, issue: datetime, model_path: Path,
         for site_id, lat, lon in SITES
     ]
     artifact["metadata"]["power_unit"] = "normalized line-side active power"
+    previous = previous_comparable_run(output_dir, artifact)
+    artifact["revision"] = compare_runs(artifact, previous) if previous else None
     if mode == "historical":
         artifact["metadata"]["warnings"] = [
             "Weather run availability uses a seven-hour estimate; historical publication time is unverified."
@@ -66,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             output_dir = Path(os.getenv("WINDPOWER_OUTPUT_DIR", "artifacts/dashboard_runs"))
             document = load_forecast_run(output_dir, request.get("run_id"))
+            previous = previous_comparable_run(output_dir, document)
+            document["revision"] = compare_runs(document, previous) if previous else None
             answer = answer_forecast_question(document, request.get("question"), request.get("selected_lead_hour"),
                                               request.get("selected_turbine_id"), request.get("horizon"),
                                               regional_fetcher=lambda saved, context: fetch_regional_context(

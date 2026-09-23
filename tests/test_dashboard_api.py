@@ -76,3 +76,19 @@ def test_live_api_keeps_retrieval_and_future_target_separate(tmp_path, monkeypat
     assert document["metadata"]["run_time_utc"] is None
     assert document["metadata"]["retrieved_at_utc"] == now.isoformat()
     assert document["forecast"][0]["valid_time_utc"] == (target + timedelta(hours=1)).isoformat()
+
+
+def test_api_saves_operating_signals_and_compares_only_previous_issue(tmp_path, monkeypatch):
+    main = tmp_path / "model" / "model.joblib"
+    write_bundle(main, "fixed", 0.4, ISSUE - timedelta(hours=1))
+    monkeypatch.setattr(weather, "fetch_issue", lambda issue, cache: weather_frame(issue=issue, run=issue - timedelta(hours=12)))
+    output = tmp_path / "out"
+    first_status, first = forecast_document("historical", ISSUE, main, tmp_path / "cache", output)
+    second_status, second = forecast_document("historical", ISSUE + timedelta(days=1), main, tmp_path / "cache", output)
+    assert first_status == second_status == 200
+    assert first["revision"] is None
+    assert second["revision"]["previous_run_id"] == first["metadata"]["run_id"]
+    assert second["revision"]["overlap_hours"] == 24
+    assert second["revision"]["mean_absolute_change"] == 0
+    assert second["operations"]["mean_24h"] == 0.4
+    assert "assess_operations" in [event["step"] for event in second["events"]]
