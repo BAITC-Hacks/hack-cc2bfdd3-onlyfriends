@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { bindPlanetGestures, createInteraction, clampZoom, fitDistance, cameraFraming } from './interaction';
+import { bindPlanetGestures, createInteraction, clampZoom, fitDistance, cameraFraming, localCameraRadius } from './interaction';
 
 function setup() {
   const canvas = document.createElement('canvas');
@@ -58,12 +58,18 @@ describe('continuous planet gestures', () => {
     expect(state.zoom).toBeGreaterThan(1);
     dispose();
   });
-  it('keeps the camera outside the planet even at 5x', () => {
+  it('keeps the camera outside the planet at the globe-to-terrain transition', () => {
     const base = fitDistance(2);
     const framing = cameraFraming(2, 5);
     expect(framing.distance).toBeGreaterThan(3.7);
     expect(base / framing.distance * framing.lensZoom).toBeCloseTo(5);
-    expect(clampZoom(100)).toBe(5);
+    expect(clampZoom(100)).toBe(12);
+  });
+  it('moves the local camera closer after 5x while retaining clearance', () => {
+    expect(localCameraRadius(5)).toBeCloseTo(8);
+    expect(localCameraRadius(8)).toBeLessThan(localCameraRadius(5));
+    expect(localCameraRadius(12)).toBeGreaterThan(1.8);
+    expect(localCameraRadius(12)).toBeLessThan(2.5);
   });
   it('pans the local terrain by dragging and orbits it with shift-drag', () => {
     const { state, pointer, dispose } = setup();

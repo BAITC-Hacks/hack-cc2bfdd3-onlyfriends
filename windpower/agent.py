@@ -42,6 +42,9 @@ class ForecastState(TypedDict):
     error_message: NotRequired[str]
 
 
+ForecastSaver = Callable[[ForecastState], tuple[str, Path]]
+
+
 @dataclass(frozen=True)
 class AgentResult:
     status: str
@@ -78,6 +81,7 @@ class ForecastAgent:
         output_dir: Path,
         weather_fetcher: WeatherFetcher | None = None,
         web_searcher: WebSearcher | None = None,
+        saver: ForecastSaver | None = None,
         weather_provider: WeatherProvider | None = None,
     ) -> None:
         if not callable(predictor) or not model_version.strip():
@@ -89,6 +93,7 @@ class ForecastAgent:
             self.provider.get_historical_forecast
         )
         self.predictor = RunnableLambda(predictor, name="predict_power")
+        self.saver = saver
 
         self.weather_tool = agent_tools.make_weather_tool(self.fetch_weather)
         self.search_tool = agent_tools.make_search_tool(web_searcher or source_search.search_web)
@@ -202,6 +207,8 @@ class ForecastAgent:
         return execute
 
     def _save(self, state: ForecastState) -> tuple[str, Path]:
+        if self.saver is not None:
+            return self.saver(state)
         events = [*state["events"], {"step": "save_forecast", "status": "SUCCESS"}]
         return store.save_run(
             pd.Timestamp(state["issue"]), state["checked_weather"], state["forecast"],

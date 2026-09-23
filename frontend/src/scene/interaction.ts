@@ -11,6 +11,10 @@ export function cameraFraming(aspect: number, zoom: number) {
   const dolly = Math.min(safeZoom, sceneConfig.maxCameraDolly);
   return { distance: fitDistance(aspect) / dolly, lensZoom: safeZoom / dolly };
 }
+/** After the globe becomes terrain at 5x, dolly toward the local target with safe clearance. */
+export function localCameraRadius(zoom: number) {
+  return 8 / (1 + Math.max(0, clampZoom(zoom) - 5) * 0.45);
+}
 export function createInteraction() {
   return { down: false, pitch: 0.08, yaw: -0.22, vx: 0, vy: 0, zoom: 1,
     localX: 0, localZ: 0, localYaw: -2.4, localPitch: 0.7 };

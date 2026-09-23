@@ -11,6 +11,16 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('dashboard interactions', () => {
+  it('offers only February 2026 dates in the forecast picker', () => {
+    render(<App />);
+    const picker = screen.getByLabelText('Forecast start date') as HTMLSelectElement;
+    expect(picker.tagName).toBe('SELECT');
+    const dates = Array.from(picker.options, option => option.value);
+    expect(dates).toHaveLength(28);
+    expect(dates[0]).toBe('2026-02-01');
+    expect(dates.at(-1)).toBe('2026-02-28');
+    expect(dates.every(value => value.startsWith('2026-02-'))).toBe(true);
+  });
   it('selects a turbine and restores whole-farm metrics', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
@@ -51,7 +61,7 @@ describe('dashboard interactions', () => {
     await screen.findByTestId('scene-state');
     fireEvent.click(screen.getByRole('button', { name: '2×' }));
     expect(screen.getByTestId('scene-state').textContent).toContain('"zoom":2');
-    for (const zoom of [1, 3, 4, 5]) {
+    for (const zoom of [1, 3, 4, 5, 8, 12]) {
       fireEvent.click(screen.getByRole('button', { name: `${zoom}×` }));
       expect(screen.getByTestId('scene-state').textContent).toContain(`"zoom":${zoom}`);
     }
@@ -86,8 +96,9 @@ describe('dashboard interactions', () => {
     expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
     expect(screen.getByTestId('scene-state').textContent).toContain('2026-02-02');
     expect(screen.getByTestId('forecast-power').textContent).not.toBe(initialPower);
-    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-07-01' } });
-    expect((screen.getByLabelText('Forecast start date') as HTMLInputElement).value).toBe('2026-02-02');
+    const picker = screen.getByLabelText('Forecast start date') as HTMLSelectElement;
+    expect(Array.from(picker.options, option => option.value)).not.toContain('2026-07-01');
+    expect(picker.value).toBe('2026-02-02');
     fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '4' } });
     expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
     expect(screen.getByRole('heading', { name: 'The story behind the wind.' })).toBeTruthy();

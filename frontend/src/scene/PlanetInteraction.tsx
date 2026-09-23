@@ -2,7 +2,7 @@
 import { useFrame, useThree } from '@react-three/fiber';
 import { AmbientLight, Group, MathUtils } from 'three';
 import { sceneConfig } from './config';
-import { bindPlanetGestures, createInteraction, cameraFraming } from './interaction';
+import { bindPlanetGestures, createInteraction, cameraFraming, localCameraRadius } from './interaction';
 
 export function PlanetInteraction({ children, landscape, motion, reset, zoom, onZoom }: { children: ReactNode; landscape: ReactNode; motion: boolean; reset: number; zoom: number; onZoom: (zoom: number) => void }) {
   const root = useRef<Group>(null);
@@ -35,7 +35,7 @@ export function PlanetInteraction({ children, landscape, motion, reset, zoom, on
     if (localFill.current) localFill.current.intensity = transition * 0.85;
     renderedTarget.current.x = motion ? MathUtils.damp(renderedTarget.current.x, s.localX, 5, dt) : s.localX;
     renderedTarget.current.z = motion ? MathUtils.damp(renderedTarget.current.z, s.localZ, 5, dt) : s.localZ;
-    const radius = 8;
+    const radius = localCameraRadius(renderedZoom.current);
     const horizontal = Math.cos(s.localPitch) * radius;
     const localX = renderedTarget.current.x + Math.sin(s.localYaw) * horizontal;
     const localZ = renderedTarget.current.z + Math.cos(s.localYaw) * horizontal;

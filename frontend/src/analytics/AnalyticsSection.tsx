@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { hourLabel, monthForecast, summarize, turbines, type ForecastHour } from '../forecast/forecast';
+import { ShapPanel } from './ShapPanel';
 import './analytics.css';
 
 type Metric = 'power' | 'windSpeed' | 'windSpeed10' | 'direction' | 'temperature' | 'pressure';
@@ -54,6 +55,7 @@ export function AnalyticsSection({ hours, horizon, selected, activeHour, date, s
       <div><span>Peak predicted output</span><strong>{powers[peakIndex].toFixed(3)}<small> / {selected.length === 1 ? '1.0' : '2.0'}</small></strong><p>{hourLabel(visible[peakIndex].at, true)} · UTC+5</p></div>
       <div><span>Average wind at 100 m</span><strong>{(winds.reduce((sum, value) => sum + value, 0) / winds.length).toFixed(1)}<small> m/s</small></strong><p>Archived weather input</p></div>
     </div>
+    <ShapPanel date={date} hour={hours[activeHour]} selected={selected} scenarioTurbineId={scenarioTurbineId} />
     <div className="analytics-grid">{plots.map(plot => <TrendChart key={plot.key} hours={visible} metric={plot} selected={selected} highlighted={period === 'issue' ? hours[activeHour].at : undefined} />)}</div>
     <div className="analytics-detail"><div><span className="eyebrow">Hourly detail</span><h3>{period === 'month' ? 'February forecast archive' : `${horizon}-hour run · ${date}`}</h3></div><div className="analytics-table-wrap" role="region" tabIndex={0} aria-label="Hourly forecast readings"><table><thead><tr><th>Local time</th><th>Normalized power</th><th>Δ previous hour</th><th>Δ 24 hours</th><th>Wind 100 m</th><th>Wind 10 m</th><th>Direction</th><th>Air</th><th>Pressure</th></tr></thead><tbody>{visible.map((hour, index) => {
       const readings = selected.length ? hour.readings.filter(reading => selected.includes(reading.turbineId)) : hour.readings;

@@ -26,7 +26,7 @@ export default function PlanetScene({ hour, selected, onSelect, environment, res
     <SkyController environment={environment} motion={settings.motion} />
     <Suspense fallback={null}><SeasonalEnvironment season={environment.season} motion={settings.motion}><PlanetInteraction motion={settings.motion} reset={reset} zoom={zoom} onZoom={onZoom} landscape={<Landscape hour={hour} selected={selected} onSelect={onSelect} motion={settings.motion} showLabels={zoom > 3.6} wind={wind} offlineTurbineId={offlineTurbineId} />}>
       <Planet />
-      {turbines.map(turbine => <Turbine key={turbine.id} turbine={turbine} reading={hour.readings.find(r => r.turbineId === turbine.id)!} selected={selected.includes(turbine.id)} offline={offlineTurbineId === turbine.id} onSelect={onSelect} {...settings} />)}
+      {turbines.map((turbine, index) => <Turbine key={turbine.id} turbine={turbine} side={index === 0 ? -1 : 1} reading={hour.readings.find(r => r.turbineId === turbine.id)!} selected={selected.includes(turbine.id)} offline={offlineTurbineId === turbine.id} onSelect={onSelect} {...settings} />)}
       <Clouds />
     </PlanetInteraction></SeasonalEnvironment></Suspense>
     {zoom < 3.2 && <ContactShadows position={[0, -2.4, 0]} opacity={0.23} scale={9} blur={2.8} far={6} resolution={256} color="#526347" />}

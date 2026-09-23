@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { Group } from 'three';
 import type { Reading, Turbine as TurbineData } from '../forecast/forecast';
-import { surfacePlacement } from './placement';
+import { spreadSurfacePlacement } from './placement';
 import { sceneConfig } from './config';
 import { TurbineAsset } from './ModelAsset';
 import { Icon } from '../components/Icon';
@@ -21,10 +21,10 @@ export function ProceduralTurbine({ windSpeed, motion }: { windSpeed: number; mo
   </group>;
 }
 
-interface Props { turbine: TurbineData; reading: Reading; selected: boolean; offline?: boolean; onSelect: (id: string) => void; weather: boolean; motion: boolean; suppliedModel: boolean }
-export function Turbine({ turbine, reading, selected, offline = false, onSelect, weather, motion, suppliedModel }: Props) {
+interface Props { turbine: TurbineData; side: -1 | 1; reading: Reading; selected: boolean; offline?: boolean; onSelect: (id: string) => void; weather: boolean; motion: boolean; suppliedModel: boolean }
+export function Turbine({ turbine, side, reading, selected, offline = false, onSelect, weather, motion, suppliedModel }: Props) {
   const [hovered, setHovered] = useState(false);
-  const placement = surfacePlacement(turbine.lat, turbine.lon);
+  const placement = spreadSurfacePlacement(turbine.lat, turbine.lon, side);
   const url = suppliedModel ? '/models/supplied-turbine.glb' : sceneConfig.turbineModel;
   const rotorSpeed = turbine.status === 'offline' || offline ? 0 : reading.windSpeed;
   function select(event: ThreeEvent<MouseEvent>) { event.stopPropagation(); if (event.delta <= 5) onSelect(turbine.id); }

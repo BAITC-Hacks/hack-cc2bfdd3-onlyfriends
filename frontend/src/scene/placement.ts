@@ -15,3 +15,12 @@ export function surfacePlacement(lat: number, lon: number, clearance = 0.018) {
   const normal = latLonToVector3(lat, lon, 1);
   return { position: normal.clone().multiplyScalar(PLANET_RADIUS + clearance), quaternion: new Quaternion().setFromUnitVectors(UP, normal) };
 }
+
+/** Spread globe-only turbine drawings around their true site anchor so two models stay distinct. */
+export function spreadSurfacePlacement(lat: number, lon: number, side: -1 | 1, clearance = 0.018) {
+  const normal = latLonToVector3(lat, lon, 1);
+  const longitude = lon * Math.PI / 180;
+  const east = new Vector3(Math.cos(longitude), 0, -Math.sin(longitude));
+  normal.addScaledVector(east, side * 0.23).normalize();
+  return { position: normal.clone().multiplyScalar(PLANET_RADIUS + clearance), quaternion: new Quaternion().setFromUnitVectors(UP, normal) };
+}
