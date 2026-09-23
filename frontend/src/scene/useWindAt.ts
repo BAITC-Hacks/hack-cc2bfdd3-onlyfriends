@@ -11,7 +11,7 @@ export function useWindAt(runTime: string, at: string, archived: { speed: number
   const [state, setState] = useState<WindState | null>(null);
   const key = `${runTime}:${latitude}:${longitude}`;
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !runTime) return;
     const cached = cache.current.get(key);
     if (cached) { setState({ key, samples: cached }); return; }
     const controller = new AbortController();
@@ -29,5 +29,5 @@ export function useWindAt(runTime: string, at: string, archived: { speed: number
     if (state.error) return { source: 'archive', speed: archived.speed, direction: archived.direction, error: state.error };
     if (state.samples) return { source: 'archive', speed: archived.speed, direction: archived.direction, error: 'Hour missing from wind API run.' };
   }
-  return { source: 'loading', speed: archived.speed, direction: archived.direction };
+  return { source: enabled && runTime ? 'loading' : 'archive', speed: archived.speed, direction: archived.direction };
 }

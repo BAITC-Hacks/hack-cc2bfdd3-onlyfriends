@@ -58,6 +58,32 @@ def test_missing_model_is_explicit_and_does_not_request_weather(tmp_path, monkey
     assert not (tmp_path / "out").exists()
 
 
+def test_historical_api_reads_complete_february_csv_without_model(tmp_path, monkeypatch):
+    rows = []
+    for lead_hour in range(1, 49):
+        for turbine_id in ("1", "2"):
+            rows.append({
+                "valid_time_utc": ISSUE + timedelta(hours=lead_hour),
+                "turbine_id": turbine_id,
+                "predicted_power": 0.2 + lead_hour / 1000,
+            })
+    csv_path = tmp_path / "february_latest_forecast.csv"
+    import pandas as pd
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    monkeypatch.setattr(weather, "fetch_issue", lambda issue, cache: weather_frame(issue=issue, run=issue - timedelta(hours=12)))
+
+    status, document = forecast_document(
+        "historical", ISSUE, tmp_path / "missing.joblib", tmp_path / "cache", tmp_path / "out",
+        february_forecast_path=csv_path,
+    )
+
+    assert status == 200
+    assert document["metadata"]["model_version"].startswith("february-csv-")
+    assert document["metadata"]["power_source"] == str(csv_path)
+    assert len(document["forecast"]) == 96
+    assert document["forecast"][0]["predicted_power"] == 0.201
+
+
 def test_live_api_keeps_retrieval_and_future_target_separate(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     target = now + timedelta(hours=24)

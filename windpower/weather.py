@@ -1,7 +1,6 @@
 """Fetch and verify ECMWF forecasts as they were available at issue time."""
 
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -24,8 +23,6 @@ EXPECTED_UNITS = {
     "wind_speed_10m": "m/s", "wind_speed_100m": "m/s",
     "wind_direction_100m": "°", "temperature_2m": "°C", "surface_pressure": "hPa",
 }
-AVAILABILITY_ASSUMED = "assumed_run_plus_7h"
-AVAILABILITY_OBSERVED = "observed_before_issue"
 
 
 def select_run(issue_utc: datetime, delay_hours: int = PUBLICATION_DELAY_HOURS) -> datetime:
@@ -76,26 +73,6 @@ def _parse_payload(payload: list[dict], issue: datetime, run: datetime,
         frame["lead_hour"] = range(1, 49)
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
-
-
-def _utc_timestamp(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("weather provenance timestamp must have timezone")
-    return parsed.astimezone(timezone.utc)
-
-
-def _availability_evidence(envelope: dict, issue: datetime, run: datetime) -> str:
-    """Distinguish a pre-issue capture from the seven-hour publication assumption."""
-    observed = _utc_timestamp(envelope.get("observed_at_utc"))
-    server_date = _utc_timestamp(envelope.get("server_date_utc"))
-    if (observed is not None and server_date is not None
-            and run <= observed <= issue and run <= server_date <= issue
-            and abs((observed - server_date).total_seconds()) <= 600):
-        return AVAILABILITY_OBSERVED
-    return AVAILABILITY_ASSUMED
 
 
 def fetch_issue(issue_utc: datetime, cache_dir: Path, session: requests.Session | None = None) -> pd.DataFrame:
@@ -149,29 +126,15 @@ def fetch_issue(issue_utc: datetime, cache_dir: Path, session: requests.Session 
                 continue
             response.raise_for_status()
             payload = response.json()
-            observed_at = datetime.now(timezone.utc)
-            date_header = getattr(response, "headers", {}).get("Date")
-            try:
-                server_date = parsedate_to_datetime(date_header).astimezone(timezone.utc) if date_header else None
-            except (TypeError, ValueError, OverflowError):
-                server_date = None
             break
         _parse_payload(payload, issue, run)
         digest = sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         temporary = path.with_suffix(".tmp")
-        envelope = {
-            "params": params, "sha256": digest, "payload": payload,
-            "observed_at_utc": observed_at.isoformat(),
-            "server_date_utc": server_date.isoformat() if server_date else None,
-        }
-        temporary.write_text(json.dumps(envelope), encoding="utf-8")
+        temporary.write_text(json.dumps({"params": params, "sha256": digest, "payload": payload}), encoding="utf-8")
         temporary.replace(path)
     result = _parse_payload(payload, issue, run)
     result.attrs["weather_sha256"] = digest
     result.attrs["weather_source"] = URL
-    result.attrs["availability_evidence"] = _availability_evidence(envelope, issue, run)
-    result.attrs["weather_observed_at_utc"] = envelope.get("observed_at_utc")
-    result.attrs["weather_server_date_utc"] = envelope.get("server_date_utc")
     return result
 
 

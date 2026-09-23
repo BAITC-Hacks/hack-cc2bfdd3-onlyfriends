@@ -227,16 +227,12 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     return bundle
 
 
-def predict_features(bundle: dict, inputs: pd.DataFrame) -> pd.DataFrame:
-    """Apply a fitted model to validated forecast-only features."""
+def predict(bundle: dict, weather: pd.DataFrame) -> pd.DataFrame:
+    """Forecast normalized power for each provided turbine and valid hour."""
+    inputs = make_features(weather)
     values = _predict_candidate(bundle["candidate"], bundle["model"], inputs,
                                 bundle.get("feature_columns"))
     result = inputs[["issue_time_utc", "run_time_utc", "valid_time_utc", "turbine_id", "lead_hour"]].copy()
     result["predicted_power"] = values
     result["model_version"] = bundle["model_version"]
     return result
-
-
-def predict(bundle: dict, weather: pd.DataFrame) -> pd.DataFrame:
-    """Forecast normalized power for each provided turbine and valid hour."""
-    return predict_features(bundle, make_features(weather))

@@ -1,45 +1,30 @@
-import { describe, expect, it } from 'vitest';
-import { forecast, turbines, monthForecast, summarize, answerQuestion, createForecast, issueRunTime } from './forecast';
+import { describe, expect, it, vi } from 'vitest';
+import { askForecast, parseForecast, summarize } from './forecast';
+import { fixture } from './testFixture';
 
-describe('archived February forecast', () => {
-  it('uses the two case turbines and the archived February issue', () => {
-    expect(turbines.map(({ id, lat, lon }) => ({ id, lat, lon }))).toEqual([
-      { id: '1', lat: 43.64515, lon: 78.535604 },
-      { id: '2', lat: 43.643198, lon: 78.538828 },
-    ]);
-    const firstHour = createForecast('2026-02-01')[0];
-    expect(firstHour.at).toBe('2026-01-31T20:00:00Z');
-    expect(firstHour.readings.map(reading => reading.power)).toEqual([
-      0.0141419070706263, 0.0121572086426179,
-    ]);
-    expect(issueRunTime('2026-02-01')).toBe('2026-01-31T12:00:00Z');
+describe('forecast transport', () => {
+  it('joins real weather and model power by turbine, hour, and timestamp', () => {
+    const document = parseForecast(fixture());
+    expect(document.hours).toHaveLength(48);
+    expect(document.turbines.map(turbine => turbine.id)).toEqual(['1', '2']);
+    expect(document.hours[0].readings[0].windSpeed).toBeCloseTo(7.1);
+    expect(document.hours[0].readings[0].power).toBeCloseTo(1 / 48);
+    expect(summarize(document.hours[47]).power).toBe(1);
   });
-  it('provides 48 consecutive hourly readings for every turbine', () => {
-    expect(forecast).toHaveLength(48);
-    forecast.forEach((hour, i) => {
-      expect(Date.parse(hour.at) - Date.parse(forecast[0].at)).toBe(i * 3600000);
-      expect(hour.readings).toHaveLength(turbines.length);
-      hour.readings.forEach(r => {
-        expect(r.power).toBeGreaterThanOrEqual(0);
-        expect(r.power).toBeLessThanOrEqual(1);
-      });
-    });
+  it('rejects missing or forged model output', () => {
+    const incomplete = fixture();
+    incomplete.forecast.pop();
+    expect(() => parseForecast(incomplete)).toThrow('incomplete');
+    const invalid = fixture();
+    invalid.forecast[0].predicted_power = 3.6;
+    expect(() => parseForecast(invalid)).toThrow('invalid');
   });
-  it('covers every local February hour and rejects dates without archived issues', () => {
-    expect(monthForecast).toHaveLength(672);
-    expect(monthForecast[0].at).toBe('2026-01-31T19:00:00Z');
-    expect(monthForecast.at(-1)?.at).toBe('2026-02-28T18:00:00Z');
-    expect(() => createForecast('2026-07-01')).toThrow(/No archived forecast/);
-  });
-  it('aggregates only the selected hour', () => {
-    expect(summarize(forecast[0]).power).toBeCloseTo(forecast[0].readings.reduce((sum, r) => sum + r.power, 0));
-    expect(summarize(forecast[0]).power).not.toBe(summarize(forecast[12]).power);
-  });
-  it('answers from the selected horizon and admits unsupported questions', () => {
-    expect(answerQuestion('peak power', forecast.slice(0, 24))).toContain('normalized');
-    expect(answerQuestion('buy me a car', forecast)).toContain('Try asking');
-    const unsupportedStop = answerQuestion('Stop turbine 9 for four hours tomorrow. Find the best window.', forecast);
-    expect(unsupportedStop).toContain('maintenance');
-    expect(unsupportedStop).not.toContain('peaks');
+  it('sends the selected forecast context for Russian questions', async () => {
+    const request = { run_id: 'a'.repeat(20), question: 'Почему сегодня сильный ветер?', selected_lead_hour: 4, selected_turbine_id: '2', horizon: 24 as const };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ answer: 'На 23 февраля прогнозируется сильный ветер.' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await askForecast(request)).toContain('23 февраля');
+    expect(fetchMock).toHaveBeenCalledWith('/api/ask', expect.objectContaining({ method: 'POST', body: JSON.stringify(request) }));
+    vi.unstubAllGlobals();
   });
 });

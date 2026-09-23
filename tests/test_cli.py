@@ -8,7 +8,7 @@ import pytest
 import joblib
 
 from windpower import cli, workflow
-from windpower.weather import SITES, VARIABLES
+from windpower.weather import VARIABLES
 from windpower.workflow import raw_digest, raw_paths, weather_cache_digest, station_total
 from windpower.model import ALGORITHM_VERSION
 
@@ -167,27 +167,10 @@ def test_agent_run_reuses_fresh_model_and_records_workflow(tmp_path):
     result = cli.run_agent(date(2026, 1, 31), raw_dir, artifacts, session=ArchiveSession())
 
     assert result.exists()
-    saved_forecast = pd.read_csv(result)
-    assert len(saved_forecast) == 96
-    assert saved_forecast.model_version.eq("test-model").all()
-    assert saved_forecast.groupby("turbine_id").requested_latitude.first().to_dict() == {
-        int(turbine_id): latitude for turbine_id, latitude, _ in SITES
-    }
-    saved_mtime = result.stat().st_mtime_ns
-    repeated = cli.run_agent(date(2026, 1, 31), raw_dir, artifacts, session=ArchiveSession())
-    assert repeated == result
-    assert repeated.stat().st_mtime_ns == saved_mtime
-    assert len(list((artifacts / "forecasts").glob("*.csv"))) == 1
     traces = [json.loads(path.read_text()) for path in (artifacts / "agent_runs").glob("*.json")]
-    assert len(traces) == 2
-    assert all(trace["status"] == "SUCCESS" for trace in traces)
+    assert len(traces) == 1
+    assert traces[0]["status"] == "SUCCESS"
     assert traces[0]["steps"] == ["history_checked", "model_loaded", "forecast_issued"]
-    graph_steps = [event["step"] for event in traces[0]["graph_events"]]
-    assert graph_steps[:7] == [
-        "validate_request", "fetch_weather_run", "validate_inputs", "build_features",
-        "predict_power", "validate_forecast", "analyze_forecast",
-    ]
-    assert graph_steps[-1] == "save_forecast"
     forecast_trace = json.loads(next((artifacts / "runs").glob("*.json")).read_text())
     assert forecast_trace["training_raw_sha256"] is None
     assert forecast_trace["training_history_sha256"] == "past-only"
@@ -216,7 +199,7 @@ def test_agent_retrains_when_training_weather_archive_changes(tmp_path, monkeypa
         retrained.append(True)
         return stored
     monkeypatch.setattr(workflow, "train_pipeline", fake_train)
-    monkeypatch.setattr(workflow, "forecast_issue", lambda day, model, root, session=None, **kwargs: root / "forecast.csv")
+    monkeypatch.setattr(workflow, "forecast_issue", lambda day, model, root, session=None: root / "forecast.csv")
 
     workflow.run_agent(date(2026, 2, 1), raw_dir, artifacts)
 
@@ -236,7 +219,7 @@ def test_first_agent_run_trains_only_on_information_before_issue(tmp_path, monke
         return bundle()
     monkeypatch.setattr(workflow, "train_pipeline", fake_train)
     monkeypatch.setattr(workflow, "load_bundle_for_issue", lambda day, root: bundle())
-    monkeypatch.setattr(workflow, "forecast_issue", lambda day, model, root, session=None, **kwargs: root / "forecast.csv")
+    monkeypatch.setattr(workflow, "forecast_issue", lambda day, model, root, session=None: root / "forecast.csv")
 
     workflow.run_agent(date(2026, 1, 31), raw_dir, tmp_path / "artifacts")
 

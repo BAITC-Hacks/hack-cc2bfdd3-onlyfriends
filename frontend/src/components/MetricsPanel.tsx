@@ -1,15 +1,15 @@
-import { summarize, turbines, type ForecastHour } from '../forecast/forecast';
+import { summarize, type ForecastHour, type Turbine } from '../forecast/forecast';
 import { Icon } from './Icon';
 import { selectionForecast } from '../turbines/tableModel';
 
-interface Props { hour: ForecastHour; selected: string[]; onSelect: (ids: string[]) => void; whatIf?: boolean }
-export function MetricsPanel({ hour, selected, onSelect, whatIf = false }: Props) {
+interface Props { hour: ForecastHour; turbines: Turbine[]; selected: string[]; onSelect: (ids: string[]) => void }
+export function MetricsPanel({ hour, turbines, selected, onSelect }: Props) {
   const summary = summarize(selected.length ? selectionForecast(hour, selected) : hour);
   const reading = selected.length === 1 ? hour.readings.find(r => r.turbineId === selected[0]) : undefined;
   const turbine = selected.length === 1 ? turbines.find(t => t.id === selected[0]) : undefined;
   return <>
-    <aside className="metrics-strip" aria-label="Farm forecast metrics">
-      <div><span>{selected.length ? `${selected.length} selected · ${whatIf ? 'What-if output' : 'Normalized output'}` : whatIf ? 'What-if output' : 'Normalized output'}</span><strong data-testid="forecast-power">{summary.power.toFixed(3)}<small>/ {selected.length === 1 ? '1' : '2'}</small></strong></div>
+    <aside className="metrics-strip" aria-label="Forecast metrics">
+      <div><span>{selected.length ? `${selected.length} selected · Mean normalized power` : 'Mean normalized power'}</span><strong data-testid="forecast-power">{summary.power.toFixed(3)}<small> / 1</small></strong></div>
       <div><span>Wind at 100 m</span><strong>{summary.windSpeed.toFixed(1)}<small>m/s</small></strong></div>
       <div><span>Air</span><strong>{Math.round(summary.temperature)}<small>°C</small></strong></div>
     </aside>

@@ -3,8 +3,8 @@ import { hourLabel } from '../forecast/forecast';
 import { Icon } from '../components/Icon';
 import type { TurbineRow } from './tableModel';
 
-interface Props { rows: TurbineRow[]; timestamp: string; selected: string[]; onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onReset: () => void }
-export function TurbineTable({ rows, timestamp, selected, onToggle, onSelectPage, onReset }: Props) {
+interface Props { rows: TurbineRow[]; timestamp: string; mode: 'historical' | 'live'; selected: string[]; onToggle: (id: string) => void; onSelectPage: (checked: boolean) => void; onReset: () => void }
+export function TurbineTable({ rows, timestamp, mode, selected, onToggle, onSelectPage, onReset }: Props) {
   const checkbox = useRef<HTMLInputElement>(null);
   const count = rows.filter(row => selected.includes(row.id)).length;
   useEffect(() => { if (checkbox.current) checkbox.current.indeterminate = count > 0 && count < rows.length; }, [count, rows.length]);
@@ -16,7 +16,7 @@ export function TurbineTable({ rows, timestamp, selected, onToggle, onSelectPage
         return <tr key={row.id} data-selected={selected.includes(row.id)}>
           <td><input type="checkbox" aria-label={`Select ${row.name}`} checked={selected.includes(row.id)} onChange={() => onToggle(row.id)} /></td>
           <th scope="row"><span title={row.name}>{row.id}</span></th>
-          <td><span className="turbine-status" title="Archived prediction and weather"><i />Archived</span></td>
+          <td><span className="turbine-status" title="Predicted power and forecast weather"><i />{mode === 'historical' ? 'Archived' : 'Forecast'}</span></td>
           <td>{reading ? `${reading.windSpeed.toFixed(1)} m/s` : '—'}</td>
           <td>{reading ? `${reading.direction}°` : '—'}</td>
           <td className="table-power">{reading ? `${reading.power.toFixed(3)} / 1` : '—'}</td>

@@ -1,6 +1,6 @@
 """Application workflow for training and archived forecast issuance."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -9,9 +9,7 @@ from uuid import uuid4
 import joblib
 import pandas as pd
 
-from windpower.agent import ForecastAgent
-from windpower.forecast_rules import station_total, verify_forecast
-from windpower.model import ALGORITHM_VERSION, EARLY_CUTOFF, predict, predict_features
+from windpower.model import ALGORITHM_VERSION, EARLY_CUTOFF, predict
 from windpower.training import (
     ARCHIVE_START, TIMEZONE, TRAINING_END, issue_time, raw_digest, raw_paths,
     train_pipeline, weather_cache_digest,
@@ -19,10 +17,33 @@ from windpower.training import (
 from windpower.weather import PUBLICATION_DELAY_HOURS, URL, fetch_issue
 
 
-def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None, *,
-                   prepared_weather: pd.DataFrame | None = None,
-                   prepared_prediction: pd.DataFrame | None = None,
-                   agent_events: list[dict[str, str]] | None = None) -> Path:
+def _verify_forecast(frame: pd.DataFrame, weather: pd.DataFrame, issue: datetime) -> dict:
+    if weather["available_at_assumed_utc"].max() > issue:
+        raise ValueError("weather run was unavailable at issue time under publication assumption")
+    for _, group in frame.groupby("turbine_id"):
+        if len(group) != 48 or sorted(group.lead_hour.tolist()) != list(range(1, 49)):
+            raise ValueError("forecast must contain 48 unique hourly leads per turbine")
+        if group.valid_time_utc.nunique() != 48 or not group.predicted_power.between(0, 1).all():
+            raise ValueError("forecast has missing hours or power outside [0, 1]")
+    if set(frame.turbine_id.astype(str)) != {"1", "2"}:
+        raise ValueError("forecast must contain both turbines")
+    ramps = frame.sort_values("lead_hour").groupby("turbine_id").predicted_power.diff().abs()
+    return {"max_hourly_ramp": float(ramps.max()), "warnings": ["large hourly ramp"] if ramps.max() > 0.7 else []}
+
+
+def station_total(frame: pd.DataFrame) -> pd.DataFrame:
+    """Sum two normalized turbine powers in units of one turbine nameplate equivalent."""
+    keys = ["issue_time_utc", "run_time_utc", "valid_time_utc", "lead_hour", "model_version", "run_id", "weather_sha256"]
+    grouped = frame.groupby(keys, as_index=False).agg(predicted_power=("predicted_power", "sum"),
+                                                       turbines=("turbine_id", "nunique"))
+    if len(grouped) != 48 or not grouped.turbines.eq(2).all():
+        raise ValueError("station total requires both turbines for all 48 hours")
+    grouped = grouped.drop(columns="turbines")
+    grouped["unit"] = "one_turbine_nameplate_equivalent"
+    return grouped
+
+
+def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None) -> Path:
     """Issue an idempotent 48-hour forecast and structured execution trace."""
     issue = issue_time(day)
     root = Path(artifacts_dir)
@@ -30,9 +51,7 @@ def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None, *
         trained_through = pd.Timestamp(bundle["trained_through_utc"])
         if trained_through >= pd.Timestamp(issue):
             raise ValueError(f"model trained after issue: {trained_through.isoformat()} >= {issue.isoformat()}")
-        weather = prepared_weather if prepared_weather is not None else fetch_issue(
-            issue, root / "weather", session=session
-        )
+        weather = fetch_issue(issue, root / "weather", session=session)
     except Exception as error:
         failed_id = uuid4().hex[:20]
         failure = {
@@ -69,8 +88,6 @@ def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None, *
         "availability_rule": f"initialization plus {PUBLICATION_DELAY_HOURS} hours; exact historical publication not returned by API",
         "model_version": bundle["model_version"], "steps": ["weather_fetched", "weather_validated"],
     }
-    if agent_events is not None:
-        trace["agent_events"] = [*agent_events, {"step": "save_forecast", "status": "SUCCESS"}]
     model_path = root / "model" / "versions" / f"{bundle['model_version']}.joblib"
     trace["model_artifact"] = str(model_path) if model_path.exists() else None
     trace["model_artifact_sha256"] = sha256(model_path.read_bytes()).hexdigest() if model_path.exists() else None
@@ -82,23 +99,17 @@ def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None, *
     trace["model_provenance_sha256"] = bundle.get("provenance_sha256")
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        prediction = prepared_prediction.copy() if prepared_prediction is not None else predict(bundle, weather)
+        prediction = predict(bundle, weather)
         trace["steps"].extend(["features_prepared", "model_executed"])
-        diagnostics = verify_forecast(prediction, weather, issue)
+        diagnostics = _verify_forecast(prediction, weather, issue)
         trace["steps"].append("forecast_validated")
-        prediction["model_version"] = bundle["model_version"]
         prediction["run_id"] = run_id
         prediction["weather_sha256"] = weather_digest
         prediction["weather_source"] = URL
         prediction["weather_model"] = "ecmwf_ifs"
-        weather_metadata = [
-            "turbine_id", "lead_hour", "valid_time_utc", "available_at_assumed_utc",
-            "requested_latitude", "requested_longitude", "grid_latitude", "grid_longitude",
-        ]
-        prediction = prediction.merge(
-            weather[weather_metadata], on=["turbine_id", "lead_hour", "valid_time_utc"],
-            how="left", validate="one_to_one",
-        )
+        prediction["assumed_available_at_utc"] = weather.available_at_assumed_utc.to_numpy()
+        for column in ("requested_latitude", "requested_longitude", "grid_latitude", "grid_longitude"):
+            prediction[column] = weather[column].to_numpy()
         prediction["valid_time_local"] = prediction.valid_time_utc.dt.tz_convert(TIMEZONE)
         station = station_total(prediction)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +178,7 @@ def run_agent(day: date, raw_dir: Path, artifacts_dir: Path, session=None) -> Pa
     root = Path(artifacts_dir)
     agent_run_id = uuid4().hex[:20]
     trace = {
-        "agent_run_id": agent_run_id, "agent": "ForecastAgent",
+        "agent_run_id": agent_run_id, "agent": "windpower_daily_orchestrator",
         "issue_time_utc": issue_time(day).isoformat(), "status": "RUNNING", "steps": [],
     }
     trace_dir = root / "agent_runs"
@@ -203,35 +214,9 @@ def run_agent(day: date, raw_dir: Path, artifacts_dir: Path, session=None) -> Pa
             trace["steps"].append("model_loaded")
         if issue_time(day) <= EARLY_CUTOFF.to_pydatetime():
             bundle = load_bundle_for_issue(day, root)
-        issue = issue_time(day)
-        if pd.Timestamp(bundle["trained_through_utc"]) >= pd.Timestamp(issue):
-            raise ValueError("model was trained on data unavailable at issue time")
-
-        def save_graph_result(state):
-            path = forecast_issue(
-                day, bundle, root, session=session,
-                prepared_weather=state["weather"],
-                prepared_prediction=state["forecast"],
-                agent_events=state["events"],
-            )
-            return path.stem.split("_")[-1], path
-
-        graph = ForecastAgent(
-            predictor=lambda prepared: predict_features(bundle, prepared),
-            model_version=bundle["model_version"],
-            cache_dir=root / "weather",
-            output_dir=root / "forecasts",
-            weather_fetcher=lambda at: fetch_issue(at, root / "weather", session=session),
-            saver=save_graph_result,
-        )
-        result = graph.run(issue)
-        trace["graph_events"] = list(result.events)
-        if result.status != "SUCCESS" or result.artifact_path is None:
-            raise ValueError(f"{result.error_code}: {result.error_message}")
-        forecast_path = result.artifact_path
+        forecast_path = forecast_issue(day, bundle, root, session=session)
         trace["steps"].append("forecast_issued")
-        trace.update({"status": "SUCCESS", "model_version": bundle["model_version"],
-                      "forecast_run_id": result.run_id, "forecast_path": str(forecast_path)})
+        trace.update({"status": "SUCCESS", "model_version": bundle["model_version"], "forecast_path": str(forecast_path)})
         return forecast_path
     except Exception as error:
         trace.update({"status": "FAILED", "error_type": type(error).__name__, "detail": str(error).split(" for url:")[0]})

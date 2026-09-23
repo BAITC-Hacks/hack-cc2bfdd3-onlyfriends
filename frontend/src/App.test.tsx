@@ -1,162 +1,104 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
+import { fixture } from './forecast/testFixture';
 
-vi.mock('./scene/PlanetScene', () => ({ default: (props: Record<string, unknown>) => <div data-testid="scene-state">{JSON.stringify(props)}</div> }));
+vi.mock('./scene/PlanetScene', () => ({ default: ({ selected, hour, zoom, environment }: { selected: string[]; hour: { at: string }; zoom: number; environment: { season: string } }) => <div data-testid="scene-state">{selected.join(',')}/{hour.at}/{zoom}/{environment.season}</div> }));
 beforeEach(() => {
   window.history.replaceState(null, '', '#overview');
   Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => ({ ok: true, json: async () => fixture(url.includes('mode=live') ? 'live' : 'historical') })));
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-describe('dashboard interactions', () => {
-  it('offers only February 2026 dates in the forecast picker', () => {
-    render(<App />);
-    const picker = screen.getByLabelText('Forecast start date') as HTMLSelectElement;
-    expect(picker.tagName).toBe('SELECT');
-    const dates = Array.from(picker.options, option => option.value);
-    expect(dates).toHaveLength(28);
-    expect(dates[0]).toBe('2026-02-01');
-    expect(dates.at(-1)).toBe('2026-02-28');
-    expect(dates.every(value => value.startsWith('2026-02-'))).toBe(true);
-  });
-  it('selects a turbine and restores whole-farm metrics', async () => {
+describe('forecast dashboard', () => {
+  it('renders the loaded model output and synchronizes selected turbine and hour', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
+    expect(screen.getByText('2 TURBINES · HISTORICAL')).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining('mode=historical'));
+    expect(screen.getByTestId('forecast-power').textContent).toContain('0.021');
     fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: '2' } });
-    expect(screen.getByRole('heading', { name: 'Turbine 2' })).toBeTruthy();
-    expect(screen.getByTestId('scene-state').textContent).toContain('"selected":["2"]');
-    fireEvent.click(screen.getByLabelText('Show whole farm'));
-    expect(screen.queryByRole('complementary', { name: 'Turbine insight' })).toBeNull();
-    expect(screen.getByRole('complementary', { name: 'Farm forecast metrics' })).toBeTruthy();
-  });
-  it('clamps the selected hour when switching from 48 to 24 hours', async () => {
-    render(<App />);
-    await screen.findByTestId('scene-state');
-    const slider = screen.getByLabelText('Forecast hour') as HTMLInputElement;
-    fireEvent.change(slider, { target: { value: '47' } });
+    expect(screen.getByTestId('scene-state').textContent).toContain('2/');
+    const initialScene = screen.getByTestId('scene-state').textContent;
+    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '23' } });
+    expect(screen.getByTestId('scene-state').textContent).not.toBe(initialScene);
     fireEvent.click(screen.getByRole('button', { name: '24 hours' }));
-    expect(slider.value).toBe('23');
-    expect(slider.max).toBe('23');
-    fireEvent.click(screen.getByRole('button', { name: 'When is peak power?' }));
-    expect(screen.getByRole('status').textContent).toContain('24-hour archived forecast');
+    expect((screen.getByLabelText('Forecast hour') as HTMLInputElement).max).toBe('23');
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
-  it('plays, wraps at the horizon, and stops when scrubbing', async () => {
+  it('passes forecast time environment and 5x zoom to the scene', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
-    vi.useFakeTimers();
-    const slider = screen.getByLabelText('Forecast hour') as HTMLInputElement;
-    fireEvent.change(slider, { target: { value: '47' } });
-    fireEvent.click(screen.getByLabelText('Play forecast'));
-    act(() => { vi.advanceTimersByTime(1200); });
-    expect(slider.value).toBe('0');
-    fireEvent.change(slider, { target: { value: '7' } });
-    expect(screen.getByLabelText('Play forecast')).toBeTruthy();
-    act(() => { vi.advanceTimersByTime(2400); });
-    expect(slider.value).toBe('7');
+    fireEvent.click(screen.getByRole('button', { name: '5×' }));
+    expect(screen.getByTestId('scene-state').textContent).toContain('/5/');
+    expect(screen.getByRole('button', { name: '5×' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('main').getAttribute('data-season')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset planet view' }));
+    expect(screen.getByRole('button', { name: '1×' }).getAttribute('aria-pressed')).toBe('true');
   });
-  it('changes zoom, resets it and propagates display settings to the scene', async () => {
+  it('checks live weather again after fifteen minutes while the page is visible', async () => {
+    Object.defineProperty(window.document, 'visibilityState', { configurable: true, value: 'visible' });
+    const intervals = vi.spyOn(window, 'setInterval');
+    try {
+      render(<App />);
+      await screen.findByTestId('scene-state');
+      fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'live' } });
+      await screen.findByText('2 TURBINES · LIVE');
+      const initialCalls = vi.mocked(fetch).mock.calls.length;
+      const poll = intervals.mock.calls.find(([, delay]) => delay === 15 * 60 * 1000)?.[0] as (() => void) | undefined;
+      expect(poll).toBeTruthy();
+      await act(async () => { poll?.(); await Promise.resolve(); });
+      expect(vi.mocked(fetch).mock.calls.length).toBe(initialCalls + 1);
+    } finally { intervals.mockRestore(); }
+  });
+  it('shows model-unavailable status without a forecast or false power', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error_code: 'MODEL_UNAVAILABLE', message: 'Trained power model file is missing.' }) }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('MODEL_UNAVAILABLE'));
+    expect(screen.queryByLabelText('Forecast metrics')).toBeNull();
+    expect(screen.queryByTestId('scene-state')).toBeNull();
+  });
+  it('keeps the hackathon date range in historical replay only', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
-    fireEvent.click(screen.getByRole('button', { name: '2×' }));
-    expect(screen.getByTestId('scene-state').textContent).toContain('"zoom":2');
-    for (const zoom of [1, 3, 4, 5, 8, 12]) {
-      fireEvent.click(screen.getByRole('button', { name: `${zoom}×` }));
-      expect(screen.getByTestId('scene-state').textContent).toContain(`"zoom":${zoom}`);
-    }
-    fireEvent.click(screen.getByLabelText('Reset planet view'));
-    expect(screen.getByTestId('scene-state').textContent).toContain('"zoom":1');
-    fireEvent.click(screen.getByLabelText('Display settings'));
-    fireEvent.click(screen.getByLabelText('Weather markers'));
-    fireEvent.click(screen.getByLabelText('Use supplied GLB turbine'));
-    expect(screen.getByTestId('scene-state').textContent).toContain('"weather":false');
-    expect(screen.getByTestId('scene-state').textContent).toContain('"suppliedModel":true');
+    expect(screen.getByLabelText('Issue date')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'live' } });
+    expect(screen.queryByLabelText('Issue date')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'historical' } });
+    const date = screen.getByLabelText('Issue date') as HTMLInputElement;
+    expect(date.min).toBe('2026-01-31');
+    expect(date.max).toBe('2026-02-28');
+    await screen.findByText('2 TURBINES · HISTORICAL');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining('mode=historical'));
   });
-  it('handles unsupported assistant questions and closes the response', async () => {
+  it('shows an explicit service error when the API cannot be reached', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connect refused')));
+    render(<App />);
+    expect((await screen.findByRole('status')).textContent).toContain('API_UNAVAILABLE');
+    expect(screen.queryByLabelText('Forecast metrics')).toBeNull();
+  });
+  it('asks about the selected 23 February forecast and sends its hour and turbine', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url === '/api/ask') return { ok: true, json: async () => ({ answer: '23 февраля ветер по прогнозу усиливается.' }) };
+      const issue = new URL(url, 'http://localhost').searchParams.get('issue') ?? undefined;
+      return { ok: true, json: async () => fixture('historical', issue) };
+    }));
     render(<App />);
     await screen.findByTestId('scene-state');
-    fireEvent.change(screen.getByLabelText('Ask the demo forecast assistant'), { target: { value: 'buy a car' } });
-    fireEvent.click(screen.getByLabelText('Ask assistant'));
-    expect(screen.getByRole('status').textContent).toContain('No live AI service');
-    fireEvent.click(screen.getByLabelText('Dismiss answer'));
-    expect(screen.queryByRole('status')).toBeNull();
-  });
-  it('honors reduced-motion preference on first render', async () => {
-    vi.mocked(window.matchMedia).mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
-    render(<App />);
-    expect((await screen.findByTestId('scene-state')).textContent).toContain('"motion":false');
-  });
-  it('synchronizes date, lighting, power and season from the selected forecast', async () => {
-    render(<App />);
-    await screen.findByTestId('scene-state');
-    const initialPower = screen.getByTestId('forecast-power').textContent;
-    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-02-02' } });
-    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '17' } });
-    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
-    expect(screen.getByTestId('scene-state').textContent).toContain('2026-02-02');
-    expect(screen.getByTestId('forecast-power').textContent).not.toBe(initialPower);
-    const picker = screen.getByLabelText('Forecast start date') as HTMLSelectElement;
-    expect(Array.from(picker.options, option => option.value)).not.toContain('2026-07-01');
-    expect(picker.value).toBe('2026-02-02');
-    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '4' } });
-    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter');
-    expect(screen.getByRole('heading', { name: 'The story behind the wind.' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Full February' }));
-    expect(screen.getByText('1–28 Feb · every local hour')).toBeTruthy();
-  });
-  it('keeps analytics below the assistant and exposes all February hours by scrolling', () => {
-    render(<App />);
-    const assistant = screen.getByLabelText('Ask the demo forecast assistant');
-    const analytics = screen.getByRole('region', { name: 'Hourly forecast readings' });
-    expect(assistant.compareDocumentPosition(analytics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Full February' }));
-    expect(analytics.querySelectorAll('tbody tr')).toHaveLength(672);
-    expect(analytics.querySelector('th')?.textContent).toBe('Local time');
-    expect(analytics.textContent).toContain('Δ 24 hours');
-    fireEvent.click(screen.getByRole('link', { name: 'Analytics' }));
-    expect(window.location.hash).toBe('#analytics');
-  });
-  it('opens Future Control, ranks the selected window, and applies a turbine-off scenario to the scene and metrics', async () => {
-    render(<App />);
-    await screen.findByTestId('scene-state');
-    fireEvent.click(screen.getByRole('button', { name: 'Plan maintenance' }));
-    expect(screen.getByRole('dialog', { name: 'Future Control' })).toBeTruthy();
-    expect(screen.getByText(/21 windows checked/)).toBeTruthy();
-    expect(screen.getAllByText(/normalized turbine-hours/i).length).toBeGreaterThan(0);
-    fireEvent.change(screen.getByLabelText('Maintenance turbine'), { target: { value: '1' } });
-    fireEvent.change(screen.getByLabelText('Duration'), { target: { value: '6' } });
-    expect(screen.getByText(/19 windows checked/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Simulate shutdown/ }));
-    expect(screen.queryByRole('dialog', { name: 'Future Control' })).toBeNull();
-    expect(screen.getByTestId('scene-state').textContent).toContain('"offlineTurbineId":"1"');
-    expect(screen.getByTestId('forecast-power').textContent).toContain('0.000');
-    expect(screen.getByText(/What-if output/)).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Active what-if scenario' })).toBeTruthy();
-    expect(screen.getByText(/What-if view · selected issue only/)).toBeTruthy();
-    const plannedHour = (screen.getByLabelText('Forecast hour') as HTMLInputElement).value;
-    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '0' } });
-    expect(screen.getByTestId('scene-state').textContent).toContain('"offlineTurbineId":null');
-    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: plannedHour } });
-    expect(screen.getByTestId('scene-state').textContent).toContain('"offlineTurbineId":"1"');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear what-if scenario' }));
-    expect(screen.getByTestId('scene-state').textContent).toContain('"offlineTurbineId":null');
-  });
-  it('turns the maintenance prompt into a reviewable plan and uses next hours on a 24-hour horizon', async () => {
-    render(<App />);
-    await screen.findByTestId('scene-state');
-    fireEvent.change(screen.getByLabelText('Ask the demo forecast assistant'), { target: { value: 'Tomorrow I need to stop turbine 2 for four hours. Find the best window.' } });
-    fireEvent.click(screen.getByLabelText('Ask assistant'));
-    expect(screen.getByRole('dialog', { name: 'Future Control' })).toBeTruthy();
-    expect((screen.getByLabelText('Maintenance turbine') as HTMLSelectElement).value).toBe('2');
-    fireEvent.click(screen.getByRole('button', { name: 'Close Future Control' }));
-    fireEvent.click(screen.getByRole('button', { name: '24 hours' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Plan maintenance' }));
-    expect(screen.getByText(/21 windows checked/)).toBeTruthy();
-    expect(screen.getByText('Next 24h')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Close Future Control' }));
-    fireEvent.change(screen.getByLabelText('Ask the demo forecast assistant'), { target: { value: 'Service turbine 1 for 7 hours' } });
-    fireEvent.click(screen.getByLabelText('Ask assistant'));
-    expect((screen.getByLabelText('Duration') as HTMLSelectElement).value).toBe('7');
+    fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'historical' } });
+    fireEvent.change(screen.getByLabelText('Issue date'), { target: { value: '2026-02-23' } });
+    await screen.findByText('2 TURBINES · HISTORICAL');
+    fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Ask forecast assistant'), { target: { value: 'почему за этот день такой сильный ветер' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask assistant' }));
+    expect((await screen.findByRole('status')).textContent).toContain('23 февраля ветер');
+    const askCall = vi.mocked(fetch).mock.calls.find(call => call[0] === '/api/ask');
+    expect(JSON.parse((askCall?.[1] as RequestInit).body as string)).toMatchObject({
+      question: 'почему за этот день такой сильный ветер', selected_lead_hour: 4,
+      selected_turbine_id: '2', horizon: 48, run_id: 'test',
+    });
   });
 });
