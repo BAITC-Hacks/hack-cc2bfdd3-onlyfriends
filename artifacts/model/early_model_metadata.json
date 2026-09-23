@@ -1,0 +1,19 @@
+{
+  "candidate": "blend_50",
+  "model_version": "38f23a1cf5ef3657",
+  "trained_rows": 61448,
+  "trained_through_utc": "2026-01-30T18:00:00+00:00",
+  "training_cutoff_utc": "2026-01-30T19:00:00+00:00",
+  "algorithm_version": "windpower-blend-v1",
+  "selected_on_months": [
+    "2025-10",
+    "2025-11",
+    "2025-12"
+  ],
+  "training_history_sha256": "7dab34014959debfac5a9282871902e475143403e199436f2975095b4c02ae29",
+  "weather_archive_sha256": "45a7a5306b5f94edf927ca8e0ac80d981994fc896aad79c9e36e6ca07a7cef08",
+  "weather_start": "2024-03-15",
+  "weather_end": "2026-01-30",
+  "provenance_path": "artifacts/model/provenance/38f23a1cf5ef3657_aabce9cc9e94.json",
+  "provenance_sha256": "aabce9cc9e94800f90c6ec593a6a03f53b70c6bfccea9bb00d91bdbe2550079b"
+}

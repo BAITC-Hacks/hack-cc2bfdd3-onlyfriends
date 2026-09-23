@@ -1,0 +1,51 @@
+{
+  "agent_run_id": "248d0b75d0074aaa859f",
+  "agent": "windpower_daily_orchestrator",
+  "issue_time_utc": "2026-02-27T19:00:00+00:00",
+  "status": "SUCCESS",
+  "steps": [
+    "history_checked",
+    "model_loaded",
+    "forecast_issued"
+  ],
+  "weather_retries": [
+    {
+      "issue_date": "2025-08-05",
+      "status": "STILL_MISSING",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-06",
+      "status": "STILL_MISSING",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-07",
+      "status": "STILL_MISSING",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-08",
+      "status": "STILL_MISSING",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-09",
+      "status": "STILL_MISSING",
+      "error_type": "HTTPError",
+      "detail": "400 Client Error: Bad Request"
+    },
+    {
+      "issue_date": "2025-08-10",
+      "status": "STILL_MISSING",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    }
+  ],
+  "model_version": "bf3acae84b67ba31",
+  "forecast_path": "artifacts/forecasts/2026-02-28_5622dd1a4c0595177791.csv"
+}

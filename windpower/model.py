@@ -1,4 +1,9 @@
-"""Select generalising power models with rolling, leakage-free validation."""
+"""Fit and select power models with one shared candidate definition.
+
+Fitting and rolling validation stay together so the evaluated candidate is
+exactly the candidate refitted for issuance; splitting them would duplicate
+the feature and prediction contract.
+"""
 
 from hashlib import sha256
 import json
@@ -198,12 +203,14 @@ def fit_at_cutoff(candidate: str, examples: pd.DataFrame, history: pd.DataFrame,
     return bundle
 
 
-def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: Path) -> dict:
+def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: Path,
+                     as_of_cutoff: pd.Timestamp = CUTOFF) -> dict:
     """Compare candidates on historic months, refit winner, persist evidence."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_examples = examples.loc[pd.to_datetime(examples.valid_time_utc, utc=True) < CUTOFF].copy()
-    safe_history = history.loc[pd.to_datetime(history.valid_time_utc, utc=True) < CUTOFF].copy()
+    cutoff = min(as_of_cutoff, CUTOFF)
+    safe_examples = examples.loc[pd.to_datetime(examples.valid_time_utc, utc=True) < cutoff].copy()
+    safe_history = history.loc[pd.to_datetime(history.valid_time_utc, utc=True) < cutoff].copy()
     scores = []
     turbine_scores = []
     for month, (train, valid) in zip(VALIDATION_MONTHS, rolling_folds(safe_examples, minimum_coverage=0.8)):
@@ -235,7 +242,7 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     metrics.to_csv(output_dir / "validation_metrics.csv", index=False)
     pd.DataFrame(turbine_scores).to_csv(output_dir / "validation_metrics_by_turbine.csv", index=False)
     winner = choose_candidate(metrics)
-    bundle = fit_at_cutoff(winner, examples, history, CUTOFF, output_dir)
+    bundle = fit_at_cutoff(winner, examples, history, cutoff, output_dir)
     early_scores = metrics.loc[metrics.month < "2026-01"].copy()
     early_winner = choose_candidate(early_scores)
     early = fit_at_cutoff(early_winner, examples, history, EARLY_CUTOFF, output_dir)

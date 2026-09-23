@@ -1,0 +1,36 @@
+{
+  "run_id": "5622dd1a4c0595177791",
+  "status": "SUCCESS",
+  "issue_time_utc": "2026-02-27T19:00:00+00:00",
+  "weather_run_utc": "2026-02-27T12:00:00+00:00",
+  "weather_sha256": "6595e8f9ac5535ee7cf0bb6025e463d1ec3efa5de3921ef2b944b09ad7f7667c",
+  "weather_source": "https://single-runs-api.open-meteo.com/v1/forecast",
+  "weather_model": "ecmwf_ifs",
+  "assumed_available_at_utc": "2026-02-27T19:00:00+00:00",
+  "availability_rule": "initialization plus 7 hours; exact historical publication not returned by API",
+  "model_version": "bf3acae84b67ba31",
+  "steps": [
+    "weather_fetched",
+    "weather_validated",
+    "features_prepared",
+    "model_executed",
+    "forecast_validated",
+    "result_analyzed",
+    "forecast_saved"
+  ],
+  "model_artifact": "artifacts/model/versions/bf3acae84b67ba31.joblib",
+  "model_artifact_sha256": "60fcfbef99c5e87a27d0802a7632f92e2dd020a20cd076f633327b2d7ed464e8",
+  "training_raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
+  "training_history_sha256": null,
+  "training_weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0",
+  "training_cutoff_utc": "2026-01-31T19:00:00+00:00",
+  "model_provenance_path": "artifacts/model/provenance/bf3acae84b67ba31_e42c34e78da5.json",
+  "model_provenance_sha256": "e42c34e78da51ec6c656c2ad144b3ffb9ad4d6ef7e5d5b5dab8f82f6b2a395e1",
+  "rows": 96,
+  "station_rows": 48,
+  "station_forecast_path": "artifacts/station_forecasts/2026-02-28_5622dd1a4c0595177791.csv",
+  "diagnostics": {
+    "max_hourly_ramp": 0.3270469154926051,
+    "warnings": []
+  }
+}

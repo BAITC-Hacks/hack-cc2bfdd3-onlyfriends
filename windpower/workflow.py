@@ -1,121 +1,20 @@
 """Application workflow for training and archived forecast issuance."""
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 import json
 from pathlib import Path
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 import joblib
 import pandas as pd
 
-from windpower.data import load_history
-from windpower.features import build_examples
-from windpower.model import ALGORITHM_VERSION, EARLY_CUTOFF, predict, select_and_train
+from windpower.model import ALGORITHM_VERSION, EARLY_CUTOFF, predict
+from windpower.training import (
+    ARCHIVE_START, TIMEZONE, TRAINING_END, issue_time, raw_digest, raw_paths,
+    train_pipeline, weather_cache_digest,
+)
 from windpower.weather import PUBLICATION_DELAY_HOURS, URL, fetch_issue
-
-
-TIMEZONE = "Asia/Almaty"
-ARCHIVE_START = date(2024, 3, 15)
-TRAINING_END = date(2026, 1, 31)
-
-
-def issue_time(day: date, timezone_name: str = TIMEZONE) -> datetime:
-    """Daily issue at local midnight, represented as UTC."""
-    return datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(timezone_name)).astimezone(timezone.utc)
-
-
-def raw_paths(raw_dir: Path) -> dict[str, Path]:
-    """Locate the two organizer CSV files without committing their contents."""
-    result = {}
-    for turbine_id in ("1", "2"):
-        matches = list(Path(raw_dir).glob(f"*turbine {turbine_id}.csv"))
-        if len(matches) != 1:
-            raise FileNotFoundError(f"expected exactly one raw CSV for turbine {turbine_id} in {raw_dir}")
-        result[turbine_id] = matches[0]
-    return result
-
-
-def raw_digest(paths: dict[str, Path]) -> str:
-    """Fingerprint source bytes and turbine assignment for model freshness."""
-    digest = sha256()
-    for turbine_id, path in sorted(paths.items()):
-        digest.update(turbine_id.encode())
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
-
-
-def weather_cache_digest(cache_dir: Path, start: date, end: date) -> str:
-    """Fingerprint exactly the issue archives used in training, including missing dates."""
-    digest = sha256()
-    for offset in range((end - start).days + 1):
-        day = start + timedelta(days=offset)
-        prefix = issue_time(day).strftime("%Y%m%dT%H%MZ")
-        matches = sorted(Path(cache_dir).glob(f"{prefix}_*.json"))
-        digest.update(day.isoformat().encode())
-        for path in matches:
-            digest.update(path.name.encode())
-            digest.update(sha256(path.read_bytes()).digest())
-    return digest.hexdigest()
-
-
-def collect_weather(start: date, end: date, cache_dir: Path) -> tuple[pd.DataFrame, list[dict]]:
-    """Fetch independent archived daily issues with bounded concurrency."""
-    dates = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
-    if not dates:
-        raise ValueError("weather date range is empty")
-    frames, errors = [], []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(fetch_issue, issue_time(day), cache_dir): day for day in dates}
-        for future in as_completed(futures):
-            day = futures[future]
-            try:
-                frames.append(future.result())
-            except Exception as error:
-                errors.append({"issue_date": day.isoformat(), "error_type": type(error).__name__, "detail": str(error)})
-    if not frames:
-        raise RuntimeError(f"no valid archived weather issues; first errors: {errors[:3]}")
-    return pd.concat(frames, ignore_index=True), sorted(errors, key=lambda row: row["issue_date"])
-
-
-def train_pipeline(raw_dir: Path, artifacts_dir: Path, start: date = ARCHIVE_START, end: date = TRAINING_END) -> dict:
-    """Read SCADA, fetch matching past runs, select model and persist metrics."""
-    paths = raw_paths(raw_dir)
-    source_digest = raw_digest(paths)
-    history = load_history(paths)
-    weather, errors = collect_weather(start, end, Path(artifacts_dir) / "weather")
-    examples = build_examples(history, weather)
-    if examples.empty:
-        raise ValueError("no hourly targets joined to archived forecasts")
-    output_dir = Path(artifacts_dir) / "model"
-    bundle = select_and_train(examples, history, output_dir)
-    bundle["raw_sha256"] = source_digest
-    bundle["weather_archive_sha256"] = weather_cache_digest(Path(artifacts_dir) / "weather", start, end)
-    bundle["weather_start"] = start.isoformat()
-    bundle["weather_end"] = end.isoformat()
-    joblib.dump(bundle, output_dir / "model.joblib")
-    metadata = {key: value for key, value in bundle.items() if key != "model"}
-    (output_dir / "model_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    manifest = {
-        "raw_sha256": source_digest,
-        "weather_archive_sha256": bundle["weather_archive_sha256"],
-        "algorithm_version": ALGORITHM_VERSION,
-        "weather_start": start.isoformat(), "weather_end": end.isoformat(),
-        "history_rows": len(history),
-        "training_examples": len(examples),
-        "weather_issues_requested": (end - start).days + 1,
-        "weather_issues_failed": errors,
-        "data_quality": history.attrs["quality"],
-        "target_cutoff_local": "2026-02-01 00:00 Asia/Almaty",
-        "weather_source": URL,
-        "availability_assumption_hours_after_initialization": PUBLICATION_DELAY_HOURS,
-    }
-    (output_dir / "training_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    return bundle
 
 
 def _verify_forecast(frame: pd.DataFrame, weather: pd.DataFrame, issue: datetime) -> dict:
@@ -168,13 +67,19 @@ def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None) -
         raise
     run = weather.run_time_utc.iloc[0]
     weather_digest = weather.attrs["weather_sha256"]
-    key = f"{issue.isoformat()}|{run.isoformat()}|{weather_digest}|{bundle['model_version']}"
+    key = (f"{issue.isoformat()}|{run.isoformat()}|{weather_digest}|"
+           f"{bundle['model_version']}|{bundle.get('provenance_sha256', '')}")
     run_id = sha256(key.encode()).hexdigest()[:20]
     output = root / "forecasts" / f"{day.isoformat()}_{run_id}.csv"
     station_output = root / "station_forecasts" / f"{day.isoformat()}_{run_id}.csv"
     trace_path = root / "runs" / f"{run_id}.json"
     if output.exists() and trace_path.exists() and station_output.exists():
-        return output
+        existing = json.loads(trace_path.read_text(encoding="utf-8"))
+        if (existing.get("training_raw_sha256") == bundle.get("raw_sha256")
+                and existing.get("training_history_sha256") == bundle.get("training_history_sha256")
+                and existing.get("training_weather_archive_sha256") == bundle.get("weather_archive_sha256")
+                and existing.get("model_provenance_sha256") == bundle.get("provenance_sha256")):
+            return output
     trace = {
         "run_id": run_id, "status": "RUNNING", "issue_time_utc": issue.isoformat(),
         "weather_run_utc": run.isoformat(), "weather_sha256": weather_digest,
@@ -187,7 +92,11 @@ def forecast_issue(day: date, bundle: dict, artifacts_dir: Path, session=None) -
     trace["model_artifact"] = str(model_path) if model_path.exists() else None
     trace["model_artifact_sha256"] = sha256(model_path.read_bytes()).hexdigest() if model_path.exists() else None
     trace["training_raw_sha256"] = bundle.get("raw_sha256")
+    trace["training_history_sha256"] = bundle.get("training_history_sha256")
     trace["training_weather_archive_sha256"] = bundle.get("weather_archive_sha256")
+    trace["training_cutoff_utc"] = bundle.get("training_cutoff_utc")
+    trace["model_provenance_path"] = bundle.get("provenance_path")
+    trace["model_provenance_sha256"] = bundle.get("provenance_sha256")
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         prediction = predict(bundle, weather)
@@ -256,8 +165,11 @@ def load_bundle_for_issue(day: date, artifacts_dir: Path) -> dict:
         return full
     metadata = json.loads((root / "early_model_metadata.json").read_text(encoding="utf-8"))
     early = joblib.load(root / "versions" / f"{metadata['model_version']}.joblib")
-    for key in ("raw_sha256", "weather_archive_sha256"):
-        early[key] = full.get(key)
+    early["raw_sha256"] = None
+    early["training_history_sha256"] = metadata["training_history_sha256"]
+    early["weather_archive_sha256"] = metadata["weather_archive_sha256"]
+    early["provenance_path"] = metadata["provenance_path"]
+    early["provenance_sha256"] = metadata["provenance_sha256"]
     return early
 
 
@@ -279,17 +191,24 @@ def run_agent(day: date, raw_dir: Path, artifacts_dir: Path, session=None) -> Pa
         manifest_path = root / "model" / "training_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else None
         if manifest:
+            trace["weather_retries"] = []
             for missing in manifest.get("weather_issues_failed", []):
                 try:
                     fetch_issue(issue_time(date.fromisoformat(missing["issue_date"])), root / "weather", session=session)
-                except Exception:
-                    pass
+                    trace["weather_retries"].append({"issue_date": missing["issue_date"], "status": "RECOVERED"})
+                except Exception as error:
+                    trace["weather_retries"].append({"issue_date": missing["issue_date"], "status": "STILL_MISSING",
+                                                     "error_type": type(error).__name__, "detail": str(error).split(" for url:")[0]})
         archive_hash = weather_cache_digest(root / "weather", date.fromisoformat(manifest["weather_start"]),
                                              date.fromisoformat(manifest["weather_end"])) if manifest else None
+        expected_end = min(TRAINING_END, day - timedelta(days=1))
+        allowed_cutoff = min(pd.Timestamp(issue_time(day)), pd.Timestamp("2026-02-01", tz=TIMEZONE).tz_convert("UTC"))
         if (bundle is None or bundle.get("raw_sha256") != source_hash
                 or bundle.get("weather_archive_sha256") != archive_hash
-                or bundle.get("algorithm_version") != ALGORITHM_VERSION):
-            bundle = train_pipeline(raw_dir, root)
+                or bundle.get("algorithm_version") != ALGORITHM_VERSION
+                or manifest is None or manifest.get("weather_end") != expected_end.isoformat()
+                or pd.Timestamp(bundle.get("training_cutoff_utc", "2100-01-01T00:00:00Z")) > allowed_cutoff):
+            bundle = train_pipeline(raw_dir, root, end=expected_end, as_of_cutoff=allowed_cutoff)
             trace["steps"].append("model_trained")
         else:
             trace["steps"].append("model_loaded")

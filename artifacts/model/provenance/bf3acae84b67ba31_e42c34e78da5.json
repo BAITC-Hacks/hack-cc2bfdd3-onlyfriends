@@ -1,0 +1,12 @@
+{
+  "algorithm_version": "windpower-blend-v1",
+  "candidate": "blend_50",
+  "model_version": "bf3acae84b67ba31",
+  "raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
+  "trained_rows": 61544,
+  "trained_through_utc": "2026-01-31T18:00:00+00:00",
+  "training_cutoff_utc": "2026-01-31T19:00:00+00:00",
+  "weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0",
+  "weather_end": "2026-01-31",
+  "weather_start": "2024-03-15"
+}

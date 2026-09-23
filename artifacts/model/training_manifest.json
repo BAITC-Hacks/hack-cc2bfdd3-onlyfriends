@@ -1,0 +1,51 @@
+{
+  "raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
+  "weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0",
+  "algorithm_version": "windpower-blend-v1",
+  "weather_start": "2024-03-15",
+  "weather_end": "2026-01-31",
+  "history_rows": 48645,
+  "training_examples": 61544,
+  "weather_issues_requested": 688,
+  "weather_issues_failed": [
+    {
+      "issue_date": "2025-08-05",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-06",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-07",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-08",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    },
+    {
+      "issue_date": "2025-08-09",
+      "error_type": "HTTPError",
+      "detail": "400 Client Error: Bad Request for url: https://single-runs-api.open-meteo.com/v1/forecast?latitude=43.64515%2C43.643198&longitude=78.535604%2C78.538828&run=2025-08-08T12%3A00&models=ecmwf_ifs&hourly=wind_speed_10m%2Cwind_speed_100m%2Cwind_direction_100m%2Ctemperature_2m%2Csurface_pressure&wind_speed_unit=ms&timezone=UTC&forecast_hours=56"
+    },
+    {
+      "issue_date": "2025-08-10",
+      "error_type": "ValueError",
+      "detail": "expected 48 hourly weather points after issue; found null"
+    }
+  ],
+  "data_quality": {
+    "raw_rows": 291859,
+    "invalid_rows": 12,
+    "ambiguous_time_rows": 12,
+    "hours_below_coverage": 120
+  },
+  "target_cutoff_local": "2026-02-01T00:00:00+05:00",
+  "weather_source": "https://single-runs-api.open-meteo.com/v1/forecast",
+  "availability_assumption_hours_after_initialization": 7
+}
