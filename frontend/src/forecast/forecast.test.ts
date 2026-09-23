@@ -18,6 +18,11 @@ describe('demo forecast', () => {
     expect(powerFromWind(12)).toBe(3.6);
     expect(powerFromWind(26)).toBe(0);
   });
+  it('assigns zero forecast output to the offline demo turbine at every hour', () => {
+    const offlineIds = turbines.filter(t => t.status === 'offline').map(t => t.id);
+    expect(offlineIds.length).toBeGreaterThan(0);
+    forecast.forEach(hour => hour.readings.filter(r => offlineIds.includes(r.turbineId)).forEach(r => expect(r.power).toBe(0)));
+  });
   it('aggregates only the selected hour', () => {
     expect(summarize(forecast[0]).power).toBeCloseTo(forecast[0].readings.reduce((sum, r) => sum + r.power, 0));
     expect(summarize(forecast[0]).power).not.toBe(summarize(forecast[12]).power);

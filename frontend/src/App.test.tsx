@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 
-vi.mock('./scene/PlanetScene', () => ({ default: ({ selected, zoom, settings }: { selected: string | null; zoom: number; settings: { motion: boolean; weather: boolean; suppliedModel: boolean } }) => <div data-testid="scene-state">{JSON.stringify({ selected, zoom, settings })}</div> }));
+vi.mock('./scene/PlanetScene', () => ({ default: (props: Record<string, unknown>) => <div data-testid="scene-state">{JSON.stringify(props)}</div> }));
 beforeEach(() => {
+  window.history.replaceState(null, '', '#overview');
   Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -17,7 +18,8 @@ describe('dashboard interactions', () => {
     expect(screen.getByRole('heading', { name: 'Turbine 02' })).toBeTruthy();
     expect(screen.getByTestId('scene-state').textContent).toContain('T02');
     fireEvent.click(screen.getByLabelText('Show whole farm'));
-    expect(screen.getByRole('heading', { name: 'A brighter outlook.' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Turbine insight' })).toBeNull();
+    expect(screen.getByRole('complementary', { name: 'Farm forecast metrics' })).toBeTruthy();
   });
   it('clamps the selected hour when switching from 48 to 24 hours', async () => {
     render(<App />);
@@ -49,6 +51,10 @@ describe('dashboard interactions', () => {
     await screen.findByTestId('scene-state');
     fireEvent.click(screen.getByRole('button', { name: '2×' }));
     expect(screen.getByTestId('scene-state').textContent).toContain('"zoom":2');
+    for (const zoom of [1, 3, 4, 5]) {
+      fireEvent.click(screen.getByRole('button', { name: `${zoom}×` }));
+      expect(screen.getByTestId('scene-state').textContent).toContain(`"zoom":${zoom}`);
+    }
     fireEvent.click(screen.getByLabelText('Reset planet view'));
     expect(screen.getByTestId('scene-state').textContent).toContain('"zoom":1');
     fireEvent.click(screen.getByLabelText('Display settings'));
@@ -70,5 +76,20 @@ describe('dashboard interactions', () => {
     vi.mocked(window.matchMedia).mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
     render(<App />);
     expect((await screen.findByTestId('scene-state')).textContent).toContain('"motion":false');
+  });
+  it('synchronizes date, lighting, power and season from the selected forecast', async () => {
+    render(<App />);
+    await screen.findByTestId('scene-state');
+    const initialPower = screen.getByTestId('forecast-power').textContent;
+    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-02-01' } });
+    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '17' } });
+    expect(screen.getByLabelText('Scene environment').textContent).toContain('winter · night');
+    expect(screen.getByTestId('scene-state').textContent).toContain('2026-02-01T21:00:00.000Z');
+    expect(screen.getByTestId('forecast-power').textContent).not.toBe(initialPower);
+    fireEvent.change(screen.getByLabelText('Forecast start date'), { target: { value: '2026-07-01' } });
+    expect(screen.getByLabelText('Scene environment').textContent).toContain('summer · night');
+    fireEvent.change(screen.getByLabelText('Forecast hour'), { target: { value: '4' } });
+    expect(screen.getByLabelText('Scene environment').textContent).toContain('summer · day');
+    expect(screen.queryByText(/Shelek/i)).toBeNull();
   });
 });
