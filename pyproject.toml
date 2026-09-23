@@ -1,0 +1,26 @@
+[project]
+name = "windpower-forecast"
+version = "0.1.0"
+description = "Leakage-safe hourly wind power forecasting from archived weather runs"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "catboost>=1.2.8,<2",
+  "joblib>=1.4,<2",
+  "numpy>=1.26,<3",
+  "pandas>=2.2,<3",
+  "requests>=2.32,<3",
+  "scikit-learn>=1.5,<2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["windpower"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
