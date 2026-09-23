@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
-from windpower.weather import SITES, VARIABLES
+from windpower.weather import SITES, VARIABLES, live_last_valid_time
 
 
 KEY_COLUMNS = ["turbine_id", "lead_hour", "valid_time_utc"]
@@ -24,8 +24,9 @@ def normalize_issue(issue_utc: datetime) -> datetime:
     return issue
 
 
-def validate_weather(weather: pd.DataFrame, issue_utc: datetime) -> pd.DataFrame:
-    """Require both turbines, 48 aligned hours, and a cycle at least seven hours old."""
+def validate_weather(weather: pd.DataFrame, issue_utc: datetime, mode: str = "historical",
+                     target_start_utc: datetime | None = None) -> pd.DataFrame:
+    """Require two aligned turbine series and mode-specific source timing."""
     issue = pd.Timestamp(normalize_issue(issue_utc))
     required = set(WEATHER_META) | set(VARIABLES)
     if not isinstance(weather, pd.DataFrame) or not required.issubset(weather.columns):
@@ -43,13 +44,22 @@ def validate_weather(weather: pd.DataFrame, issue_utc: datetime) -> pd.DataFrame
     runs = frame["run_time_utc"].drop_duplicates()
     if len(runs) != 1 or pd.isna(runs.iloc[0]):
         raise ValueError("weather must use one known model run")
-    if runs.iloc[0] + timedelta(hours=7) > issue:
-        raise ValueError("weather run may not have been available at issue time")
+    if mode == "historical":
+        if runs.iloc[0] + timedelta(hours=7) > issue:
+            raise ValueError("weather run may not have been available at issue time")
+    elif mode == "live":
+        if runs.iloc[0] != issue:
+            raise ValueError("live weather retrieval time must equal issue time")
+    else:
+        raise ValueError("mode must be historical or live")
     if len(frame) != len(TURBINE_IDS) * 48 or set(frame["turbine_id"]) != TURBINE_IDS:
         raise ValueError("weather must contain 48 hours for both turbines")
     if frame.duplicated(KEY_COLUMNS).any():
         raise ValueError("duplicate weather forecast hour")
-    if not frame["valid_time_utc"].eq(issue + pd.to_timedelta(frame["lead_hour"], unit="h")).all():
+    target = pd.Timestamp(normalize_issue(target_start_utc)) if target_start_utc else issue
+    if mode == "live" and (target < issue or target + timedelta(hours=48) > live_last_valid_time(issue.to_pydatetime())):
+        raise ValueError("live target is outside available forecast window")
+    if not frame["valid_time_utc"].eq(target + pd.to_timedelta(frame["lead_hour"], unit="h")).all():
         raise ValueError("weather forecast hours do not align with issue time")
     if any(set(group["lead_hour"]) != set(range(1, 49)) for _, group in frame.groupby("turbine_id")):
         raise ValueError("weather must contain every lead hour for both turbines")
@@ -62,7 +72,9 @@ def validate_weather(weather: pd.DataFrame, issue_utc: datetime) -> pd.DataFrame
     if numeric[["wind_speed_10m", "wind_speed_100m"]].lt(0).any().any():
         raise ValueError("weather wind speed cannot be negative")
     frame[list(VARIABLES)] = numeric
-    return frame.sort_values(["lead_hour", "turbine_id"]).reset_index(drop=True)
+    checked = frame.sort_values(["lead_hour", "turbine_id"]).reset_index(drop=True)
+    checked.attrs = dict(weather.attrs)
+    return checked
 
 
 def validate_prediction(prediction: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
@@ -93,7 +105,8 @@ def analyze_prediction(prediction: pd.DataFrame) -> dict[str, dict[str, float | 
     """Summarize checked normalized power for each turbine and both 24-hour windows."""
     summary = {}
     for turbine_id, group in prediction.groupby("turbine_id"):
-        power = group["predicted_power"]
+        power = group.sort_values("lead_hour")["predicted_power"]
+        jumps = power.diff().abs().dropna()
         summary[str(turbine_id)] = {
             "mean_power_hours_1_24": float(group.loc[group["lead_hour"] <= 24, "predicted_power"].mean()),
             "mean_power_hours_25_48": float(group.loc[group["lead_hour"] > 24, "predicted_power"].mean()),
@@ -101,5 +114,7 @@ def analyze_prediction(prediction: pd.DataFrame) -> dict[str, dict[str, float | 
             "maximum_power": float(power.max()),
             "zero_power_hours": int(power.eq(0).sum()),
             "full_power_hours": int(power.eq(1).sum()),
+            "maximum_hourly_change": float(jumps.max()) if not jumps.empty else 0.0,
+            "large_change_hours": int(jumps.gt(0.7).sum()),
         }
     return summary

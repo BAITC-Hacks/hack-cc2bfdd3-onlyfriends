@@ -22,7 +22,7 @@ Use the current task and the repository's authoritative project documentation to
 
 This repository implements the first components of an agentic system that forecasts hourly wind farm power for the next 24–48 hours. The task and scope are documented in `README.md` and `docs/PROJECT_VISION.md`; the other files in `docs/` describe the design and evaluation.
 
-Python code lives in `windpower/`, with tests in `tests/` and dependencies in `pyproject.toml` and `uv.lock`. The current agent in `windpower/agent.py` uses LangGraph for orchestration, LangChain tools for archived weather and separate web source research, and optional LangSmith tracing. A bounded daily replay driver exists; the trained prediction model and a real February evaluation are still pending. The `src/` and `evals/` directories are placeholders. Run tests with `uv run --group dev pytest -q` after installing uv, or with an equivalent project environment.
+Python code lives in `windpower/`, with tests in `tests/` and dependencies in `pyproject.toml` and `uv.lock`. The agent in `windpower/agent.py` uses LangGraph for orchestration, LangChain tools for archived weather and separate web source research, and optional LangSmith tracing. A trained model, bounded daily replay, and a separate `windpower.api` exist. The React dashboard uses locally exported archived data. February power observations are unavailable, so independent February error metrics remain pending. The `src/` and `evals/` directories are placeholders. Run tests with `uv run --group dev pytest -q` after installing uv, or with an equivalent project environment.
 
 ---
 

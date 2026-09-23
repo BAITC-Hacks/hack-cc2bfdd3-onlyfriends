@@ -11,7 +11,7 @@ export function Timeline({ hours, hour, horizon, playing, onHour, onHorizon, onP
     <button className="play-button" onClick={onPlay} aria-label={playing ? 'Pause forecast playback' : 'Play forecast'}><Icon name={playing ? 'pause' : 'play'} size={14} /></button>
     <div className="selected-time"><strong>{hourLabel(hours[hour].at)}</strong><small>{hourLabel(hours[hour].at, true).split(' · ')[0]} · UTC+5</small></div>
     <div className="timeline-track">
-      <div className="chart-bars" aria-hidden="true">{visible.map((item, i) => <div key={item.at} className={i === hour ? 'bar selected' : i < hour ? 'bar past' : 'bar'} style={{ height: `${5 + summarize(item).power / 21.6 * 17}px` }} />)}</div>
+      <div className="chart-bars" aria-hidden="true">{visible.map((item, i) => <div key={item.at} className={i === hour ? 'bar selected' : i < hour ? 'bar past' : 'bar'} style={{ height: `${5 + summarize(item).power / 2 * 17}px` }} />)}</div>
       <input id="forecast-hour" aria-label="Forecast hour" type="range" min={0} max={horizon - 1} value={hour} onChange={e => onHour(Number(e.target.value))} aria-valuetext={hourLabel(hours[hour].at, true)} />
       <div className="timeline-labels"><span>{hourLabel(visible[0].at)}</span><span>+{horizon}h</span></div>
     </div>

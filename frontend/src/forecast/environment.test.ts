@@ -19,7 +19,8 @@ describe('forecast environment in UTC+5', () => {
     expect(hours).toHaveLength(48);
     expect(environmentAt(hours[0].at).season).toBe('winter');
     expect(environmentAt(hours[47].at).season).toBe('spring');
-    expect(hours[0].readings[0].temperature).toBeLessThan(createForecast('2026-07-01')[0].readings[0].temperature);
+    expect(hours[0].readings[0].temperature).toBeTypeOf('number');
+    expect(() => createForecast('2026-07-01')).toThrow();
     expect(() => createForecast('2026-02-30')).toThrow();
   });
 });
