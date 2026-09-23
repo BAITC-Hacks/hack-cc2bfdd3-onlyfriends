@@ -93,7 +93,7 @@ function GroundDetails() {
   return <group>{details.map((detail, index) => <mesh key={index} geometry={detail.rock ? rock : grass} material={detail.rock ? rockMaterial : grassMaterial} position={[detail.x, detail.y + (detail.rock ? 0.03 : 0.06), detail.z]} scale={detail.size} castShadow />)}</group>;
 }
 
-export function Landscape({ hour, selected, onSelect, motion, showLabels, wind }: { hour: ForecastHour; selected: string[]; onSelect: (id: string) => void; motion: boolean; showLabels: boolean; wind: WindAt }) {
+export function Landscape({ hour, selected, onSelect, motion, showLabels, wind, offlineTurbineId }: { hour: ForecastHour; selected: string[]; onSelect: (id: string) => void; motion: boolean; showLabels: boolean; wind: WindAt; offlineTurbineId: string | null }) {
   return <group>
     <TerrainMesh heights={terrain.regionalHeights} size={REGIONAL_SIZE} regional />
     <Waterways />
@@ -104,9 +104,9 @@ export function Landscape({ hour, selected, onSelect, motion, showLabels, wind }
     {turbines.map(turbine => {
       const reading = hour.readings.find(item => item.turbineId === turbine.id)!;
       return <group key={turbine.id} position={localPosition(turbine.lat, turbine.lon)}>
-        <mesh receiveShadow position={[0, 0.015, 0]} onClick={e => { e.stopPropagation(); onSelect(turbine.id); }}><cylinderGeometry args={[0.13, 0.16, 0.03, 16]} /><meshStandardMaterial color={selected.includes(turbine.id) ? '#e9f8d4' : '#cad8b9'} /></mesh>
-        <group scale={0.34} onClick={e => { e.stopPropagation(); onSelect(turbine.id); }}><ProceduralTurbine windSpeed={reading.windSpeed100} motion={motion} /></group>
-        {showLabels && <Html position={[0, 0.42, 0]} center distanceFactor={6}><button className="landscape-label" onClick={() => onSelect(turbine.id)}>{turbine.name}<span>{reading.windSpeed100.toFixed(1)} m/s · {reading.power.toFixed(3)}</span></button></Html>}
+        <mesh receiveShadow position={[0, 0.015, 0]} onClick={e => { e.stopPropagation(); onSelect(turbine.id); }}><cylinderGeometry args={[0.13, 0.16, 0.03, 16]} /><meshStandardMaterial color={offlineTurbineId === turbine.id ? '#dfa79a' : selected.includes(turbine.id) ? '#e9f8d4' : '#cad8b9'} /></mesh>
+        <group scale={0.34} onClick={e => { e.stopPropagation(); onSelect(turbine.id); }}><ProceduralTurbine windSpeed={offlineTurbineId === turbine.id ? 0 : reading.windSpeed100} motion={motion} /></group>
+        {showLabels && <Html position={[0, 0.42, 0]} center distanceFactor={6}><button className="landscape-label" onClick={() => onSelect(turbine.id)}>{turbine.name}<span>{offlineTurbineId === turbine.id ? 'OFF · what-if' : `${reading.windSpeed100.toFixed(1)} m/s · ${reading.power.toFixed(3)}`}</span></button></Html>}
       </group>;
     })}
   </group>;

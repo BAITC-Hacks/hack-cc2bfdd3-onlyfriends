@@ -38,5 +38,8 @@ describe('archived February forecast', () => {
   it('answers from the selected horizon and admits unsupported questions', () => {
     expect(answerQuestion('peak power', forecast.slice(0, 24))).toContain('normalized');
     expect(answerQuestion('buy me a car', forecast)).toContain('Try asking');
+    const unsupportedStop = answerQuestion('Stop turbine 9 for four hours tomorrow. Find the best window.', forecast);
+    expect(unsupportedStop).toContain('maintenance');
+    expect(unsupportedStop).not.toContain('peaks');
   });
 });

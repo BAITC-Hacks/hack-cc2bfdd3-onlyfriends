@@ -39,7 +39,7 @@ function TrendChart({ hours, metric, selected, highlighted }: { hours: ForecastH
   </article>;
 }
 
-export function AnalyticsSection({ hours, horizon, selected, activeHour, date }: { hours: ForecastHour[]; horizon: 24 | 48; selected: string[]; activeHour: number; date: string }) {
+export function AnalyticsSection({ hours, horizon, selected, activeHour, date, scenarioTurbineId }: { hours: ForecastHour[]; horizon: 24 | 48; selected: string[]; activeHour: number; date: string; scenarioTurbineId?: string | null }) {
   const [period, setPeriod] = useState<'issue' | 'month'>('issue');
   const visible = period === 'month' ? monthForecast : hours.slice(0, horizon);
   const powers = values(visible, 'power', selected);
@@ -47,7 +47,7 @@ export function AnalyticsSection({ hours, horizon, selected, activeHour, date }:
   const peakIndex = powers.indexOf(Math.max(...powers));
   const scope = selected.length === 1 ? turbines.find(t => t.id === selected[0])?.name : 'Two-turbine farm';
   return <section className="analytics-section" id="analytics" aria-labelledby="analytics-title">
-    <div className="analytics-heading"><div><span className="eyebrow">Forecast intelligence · February 2026</span><h2 id="analytics-title">The story behind the wind.</h2><p>{scope} · hourly archive · Almaty time (UTC+5)</p></div><div className="analytics-switch" role="group" aria-label="Analytics period"><button aria-pressed={period === 'issue'} onClick={() => setPeriod('issue')}>{horizon}h issue</button><button aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>Full February</button></div></div>
+    <div className="analytics-heading"><div><span className="eyebrow">Forecast intelligence · February 2026</span><h2 id="analytics-title">The story behind the wind.</h2><p>{scope} · {scenarioTurbineId && period === 'issue' ? 'What-if view · selected issue only' : 'hourly archive'} · Almaty time (UTC+5)</p></div><div className="analytics-switch" role="group" aria-label="Analytics period"><button aria-pressed={period === 'issue'} onClick={() => setPeriod('issue')}>{horizon}h issue</button><button aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>Full February</button></div></div>
     <div className="analytics-cards">
       <div><span>Forecast coverage</span><strong>{period === 'month' ? '672' : horizon}<small> hours</small></strong><p>{period === 'month' ? '1–28 Feb · every local hour' : `${date} issue · next ${horizon} hours`}</p></div>
       <div><span>Average normalized output</span><strong>{(powers.reduce((sum, value) => sum + value, 0) / powers.length).toFixed(3)}<small> / {selected.length === 1 ? '1.0' : '2.0'}</small></strong><p>Sum of turbine forecasts</p></div>

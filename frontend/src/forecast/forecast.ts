@@ -47,6 +47,9 @@ export function hourLabel(at: string, includeDate = false) {
 
 export function answerQuestion(question: string, hours: ForecastHour[]): string {
   if (!hours.length) return 'No forecast is available for this period.';
+  if (/(?:\bstop\b|\bservice\b|\bmaintenance\b|останов|обслуж|ремонт)/i.test(question)) {
+    return 'For maintenance planning, name Turbine 1 or 2 and a duration of 1–8 hours. Example: “Stop turbine 2 for four hours tomorrow.” This demo supports that request shape only.';
+  }
   if (/peak|best|highest|maximum|power|output|energy/i.test(question)) {
     const peak = hours.reduce((best, h) => summarize(h).power > summarize(best).power ? h : best);
     return `In this ${hours.length}-hour archived forecast, combined normalized output peaks at ${summarize(peak).power.toFixed(3)} of 2.0 on ${hourLabel(peak.at, true)} (UTC+5). Physical MW and actual February generation are unavailable.`;
