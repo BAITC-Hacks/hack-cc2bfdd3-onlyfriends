@@ -6,6 +6,16 @@ import pandas as pd
 from windpower import training
 
 
+def test_provenance_records_feature_schema(tmp_path):
+    metadata = {"model_version": "v2", "candidate": "weather_d4_l10",
+                "feature_columns": ["wind_speed_100m", "wind_u100"]}
+
+    training.save_provenance(tmp_path, metadata)
+
+    record = json.loads((tmp_path / metadata["provenance_path"]).read_text())
+    assert record["feature_columns"] == metadata["feature_columns"]
+
+
 def test_training_pipeline_excludes_labels_after_historical_issue(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
