@@ -1,9 +1,37 @@
-export interface Turbine { id: string; name: string; lat: number; lon: number }
+import archived from '../data/february2026.json';
+
+export type TurbineStatus = 'active' | 'warning' | 'offline';
+export interface Turbine { id: string; name: string; region: string; lat: number; lon: number; status: TurbineStatus }
 export interface Reading {
-  turbineId: string; windSpeed: number; windSpeed10m: number; temperature: number;
+  turbineId: string; windSpeed: number; windSpeed100: number; windSpeed10: number; windSpeed10m: number; temperature: number;
   direction: number; pressure: number; power: number;
 }
 export interface ForecastHour { at: string; readings: Reading[] }
+export const turbines: Turbine[] = [
+  { id: '1', name: 'Turbine 1', region: 'Shelek', lat: 43.64515, lon: 78.535604, status: 'active' },
+  { id: '2', name: 'Turbine 2', region: 'Shelek', lat: 43.643198, lon: 78.538828, status: 'active' },
+];
+
+function adaptArchived(hours: typeof archived.month): ForecastHour[] {
+  return hours.map(hour => ({ at: hour.at, readings: hour.readings.map(reading => ({
+    ...reading, windSpeed: reading.windSpeed100, windSpeed10m: reading.windSpeed10,
+  })) }));
+}
+
+export const monthForecast = adaptArchived(archived.month);
+export const availableDates = archived.issues.map(issue => issue.date);
+export const DEFAULT_DATE = '2026-02-01';
+export function issueRunTime(date: string): string {
+  const issue = archived.issues.find(item => item.date === date);
+  if (!issue) throw new Error('No archived forecast for this date.');
+  return issue.runTime;
+}
+export function createForecast(date: string): ForecastHour[] {
+  const issue = archived.issues.find(item => item.date === date);
+  if (!issue) throw new Error('No archived forecast for this date.');
+  return adaptArchived(issue.hours);
+}
+export const forecast = createForecast(DEFAULT_DATE);
 export interface OperationSignal {
   kind: 'ramp_up' | 'ramp_down' | 'low_output';
   start_lead_hour: number; end_lead_hour: number; start_utc: string; end_utc: string;
@@ -43,7 +71,7 @@ function finite(value: number): boolean { return typeof value === 'number' && Nu
 export function parseForecast(raw: RawDocument): ForecastDocument {
   if (!raw?.metadata || raw.sites?.length !== 2 || raw.weather?.length !== 96 || raw.forecast?.length !== 96 || !raw.operations || !Array.isArray(raw.operations.signals) || !Array.isArray(raw.events)) throw new Error('Forecast response is incomplete.');
   if (!['historical', 'live'].includes(raw.metadata.mode) || !raw.metadata.model_version || !raw.metadata.weather_source || !Number.isFinite(Date.parse(raw.metadata.target_start_utc))) throw new Error('Forecast provenance is incomplete.');
-  const turbines = raw.sites.map(site => ({ id: site.id, name: site.name, lat: site.latitude, lon: site.longitude }));
+  const turbines = raw.sites.map(site => ({ id: site.id, name: site.name, region: 'Shelek', lat: site.latitude, lon: site.longitude, status: 'active' as const }));
   if (new Set(turbines.map(t => t.id)).size !== 2 || turbines.some(t => !finite(t.lat) || !finite(t.lon))) throw new Error('Turbine locations are invalid.');
   const powers = new Map<string, number>();
   for (const row of raw.forecast) {
@@ -58,7 +86,9 @@ export function parseForecast(raw: RawDocument): ForecastDocument {
     if (!Number.isInteger(row.lead_hour) || row.lead_hour < 1 || row.lead_hour > 48 || !Number.isFinite(Date.parse(row.valid_time_utc))) throw new Error('Forecast time is invalid.');
     const hour = byLead.get(row.lead_hour) ?? { at: row.valid_time_utc, readings: [] };
     if (hour.at !== row.valid_time_utc || hour.readings.some(r => r.turbineId === row.turbine_id)) throw new Error('Duplicate or unaligned forecast hour.');
-    hour.readings.push({ turbineId: row.turbine_id, windSpeed: row.wind_speed_100m, windSpeed10m: row.wind_speed_10m, temperature: row.temperature_2m, direction: row.wind_direction_100m, pressure: row.surface_pressure, power });
+    hour.readings.push({ turbineId: row.turbine_id, windSpeed: row.wind_speed_100m, windSpeed100: row.wind_speed_100m,
+      windSpeed10: row.wind_speed_10m, windSpeed10m: row.wind_speed_10m, temperature: row.temperature_2m,
+      direction: row.wind_direction_100m, pressure: row.surface_pressure, power });
     byLead.set(row.lead_hour, hour);
   }
   const hours = Array.from({ length: 48 }, (_, index) => byLead.get(index + 1));
@@ -107,7 +137,10 @@ export function summarize(hour: ForecastHour) {
   return {
     power: hour.readings.reduce((sum, reading) => sum + reading.power, 0) / n,
     windSpeed: hour.readings.reduce((sum, reading) => sum + reading.windSpeed, 0) / n,
+    windSpeed10: hour.readings.reduce((sum, reading) => sum + reading.windSpeed10, 0) / n,
+    direction: hour.readings.reduce((sum, reading) => sum + reading.direction, 0) / n,
     temperature: hour.readings.reduce((sum, reading) => sum + reading.temperature, 0) / n,
+    pressure: hour.readings.reduce((sum, reading) => sum + reading.pressure, 0) / n,
   };
 }
 export function hourLabel(at: string, includeDate = false) {

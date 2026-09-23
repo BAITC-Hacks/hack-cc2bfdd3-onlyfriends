@@ -8,7 +8,13 @@ interface Props {
 export function Timeline({ hours, hour, horizon, playing, onHour, onHorizon, onPlay }: Props) {
   const visible = hours.slice(0, horizon);
   return <section className="timeline" aria-label="Forecast timeline">
-    <div className="timeline-top"><div className="timeline-title"><span className="eyebrow">Hourly forecast</span><span className="muted">Mean normalized power across two turbines</span></div><div className="horizon-toggle" aria-label="Forecast horizon">{([24, 48] as const).map(value => <button key={value} onClick={() => onHorizon(value)} aria-pressed={horizon === value}>{value} hours</button>)}</div></div>
-    <div className="timeline-content"><button className="play-button" onClick={onPlay} aria-label={playing ? 'Pause forecast playback' : 'Play forecast'}><Icon name={playing ? 'pause' : 'play'} size={17} /></button><div className="timeline-track"><div className="chart-bars" aria-hidden="true">{visible.map((item, index) => <div key={item.at} className={index === hour ? 'bar selected' : index < hour ? 'bar past' : 'bar'} style={{ height: `${14 + summarize(item).power * 38}px` }} />)}</div><input aria-label="Forecast hour" type="range" min={0} max={horizon - 1} value={hour} onChange={event => onHour(Number(event.target.value))} aria-valuetext={hourLabel(hours[hour].at, true)} /><div className="timeline-labels"><span>{hourLabel(visible[0].at)}</span><span>{hourLabel(visible[Math.floor(horizon / 3)].at)}</span><span>{hourLabel(visible[Math.floor(horizon * 2 / 3)].at)}</span><span>{hourLabel(visible[horizon - 1].at)}</span></div></div><div className="selected-time"><span>Selected hour</span><strong>{hourLabel(hours[hour].at)}</strong><small>{hourLabel(hours[hour].at, true).split(' · ')[0]}</small></div></div>
+    <button className="play-button" onClick={onPlay} aria-label={playing ? 'Pause forecast playback' : 'Play forecast'}><Icon name={playing ? 'pause' : 'play'} size={14} /></button>
+    <div className="selected-time"><strong>{hourLabel(hours[hour].at)}</strong><small>{hourLabel(hours[hour].at, true).split(' · ')[0]} · UTC+5</small></div>
+    <div className="timeline-track">
+      <div className="chart-bars" aria-hidden="true">{visible.map((item, i) => <div key={item.at} className={i === hour ? 'bar selected' : i < hour ? 'bar past' : 'bar'} style={{ height: `${5 + summarize(item).power * 17}px` }} />)}</div>
+      <input id="forecast-hour" aria-label="Forecast hour" type="range" min={0} max={horizon - 1} value={hour} onChange={e => onHour(Number(e.target.value))} aria-valuetext={hourLabel(hours[hour].at, true)} />
+      <div className="timeline-labels"><span>{hourLabel(visible[0].at)}</span><span>+{horizon}h</span></div>
+    </div>
+    <div className="horizon-toggle" aria-label="Forecast horizon">{([24, 48] as const).map(h => <button key={h} onClick={() => onHorizon(h)} aria-label={`${h} hours`} aria-pressed={horizon === h}>{h}h</button>)}</div>
   </section>;
 }

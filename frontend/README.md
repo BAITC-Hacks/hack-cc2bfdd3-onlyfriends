@@ -1,41 +1,46 @@
-# OnlyFriends wind forecast dashboard
+# OnlyFriends · February wind forecast
 
-The React, TypeScript, Vite and React Three Fiber dashboard reads validated 48-hour forecasts from the Python API. It renders the two configured turbine coordinates. The scene never computes power; it uses normalized output from the trained model and archived or current weather from the server.
+React + TypeScript + Vite interface for the two wind turbines near Shelek. The planet and local terrain use React Three Fiber. Forecast and weather data are bundled from archived Python pipeline outputs; the site needs no backend or API key. In the local 3D view, animated wind also reads the selected ECMWF model run from Open-Meteo. The assistant answers a few forecast questions locally and is labeled as a demo.
 
 ## Run
 
-From the repository root:
+Requires Node.js 22.14+ and npm.
 
-```powershell
-uv sync
-uv run python -m windpower.api
-```
-
-The API loads `artifacts/model/model.joblib` by default. Override this trusted local path with `WINDPOWER_MODEL_PATH` if needed. The bundle must contain the fitted windpower model and its training metadata. For the 31 January 2026 historical issue, the API selects the earlier immutable model version. Without a compatible model, it returns `MODEL_UNAVAILABLE` and the dashboard shows no forecast values. Joblib files must come from a trusted source.
-
-In another terminal:
-
-```powershell
+```sh
 cd frontend
 npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. Vite forwards `/api` to `127.0.0.1:8000`. `npm test`, `npm run typecheck`, and `npm run build` validate the frontend. `uv run --group dev pytest -q` validates Python.
+Open <http://127.0.0.1:5173>. Production checks: `npm test`, `npm run typecheck`, `npm run build`.
 
-## Modes and controls
+## Explore
 
-- Live forecast is the default view and uses the current ECMWF endpoint. Leave the start date empty for the next 48 hours, or choose a future UTC date within the available window. The backend records retrieval time without claiming the current model initialization time.
-- Historical replay selects one daily issue at `00:00 Asia/Almaty` between 31 January and 28 February 2026. This calendar is limited to the hackathon evaluation period. It requests an archived ECMWF forecast run. The source provides model initialization time, while the seven-hour publication lag is an estimate; exact historical availability is not proven by the provider.
-- The timeline switches between 24 and 48 hours and selects one hour from the downloaded series. Playback never refetches weather. The card, graph and turbine scene share that hour.
-- The Turbines tab lists the two API sites for the selected hour. Search, sorting, selection, and the summary use the same downloaded forecast; the table shows normalized power as a percentage, never MW. Selecting a turbine in the table also highlights it on the planet.
-- The Operations tab shows deterministic 3-hour ramp and low-output signals, a comparison with the last comparable saved issue or retrieval, and each completed LangGraph step. Clicking a signal selects its first hour on the main forecast view. The 25-point ramp and 15% low-output thresholds are review triggers, not calibrated grid limits.
-- While the live page is open and visible, it requests a fresh forecast every 15 minutes. The API fetches current weather, reruns the model, saves an immutable run, and compares overlapping valid hours. Historical replay never compares against a later issue. For unattended checks with the page closed, run `uv run python -m windpower.watch --interval-minutes 15` in a separate terminal; this watcher skips model calculation when the weather values and model are unchanged for the same issue. Keep that process running.
-- The 3D scene changes its lighting and colors with the selected forecast hour and local season. Drag to rotate, scroll or pinch to zoom, or use the 1×–5× buttons. These effects are visual context, not additional weather observations.
-- Power in the card and graph is normalized line-side power. With both points selected, the chart and card show their mean normalized value. No MW, MWh, rated capacity, or forecast confidence is inferred.
-- The assistant sends questions to `/api/ask` with the selected forecast run, hour, turbine, and visible horizon. The Python server loads that saved run. Peak normalized power is calculated directly from its hourly values; other natural-language questions use `OPENAI_API_KEY` from `.env` or the environment. Explanatory replies use several sentences with relevant forecast values and uncertainty; simple numeric answers stay concise. The key never goes to the browser. For wind-cause questions it also retrieves sea-level pressure at five nearby ECMWF grid points. Historical questions use the archived run saved with the forecast; live regional context is fetched separately and marked as an unverified run match. Pressure differences support a possible physical explanation, but cannot prove a specific front, cyclone, or terrain effect.
-- Questions about what changed from the previous forecast are answered directly from saved overlapping hourly predictions. Other assistant answers can use the operating signals as grounded context; no LLM output changes the numerical forecast.
+- Select either turbine above the globe. The selection is shared with the turbine table and analytics.
+- Use 1×–5× zoom, trackpad pinch, keyboard +/−, or a two-finger pinch. At high zoom the globe transitions to a local 3D terrain view. Drag moves across the terrain; Shift-drag or right-drag orbits the camera. Arrow keys or WASD also move it. On touch, horizontal drag or two-finger pan moves the terrain. Normal wheel scrolling and vertical touch swipes move down to analytics.
+- Choose a February issue date and a 24- or 48-hour horizon. The timeline, 3D turbine blades, metrics, and assistant use the same archived hourly forecast.
+- Scroll below the assistant, or select **Analytics**, for six forecast charts and an hourly table. Switch between the selected issue and all 672 February hours. Table columns include changes from the previous hour and from 24 hours earlier.
+- **Turbines** shows both coordinate-specific forecasts, with search, sort, shared selection, and a return to the 3D view.
 
-The procedural turbine rotor speed is a bounded visual mapping of forecast wind at 100 m, not physical RPM. Wind direction rotates the visual turbine; the card shows the source direction numerically. The supplied GLB in `public/models/supplied-turbine.glb` is one static mesh with no separate `Rotor` node, so its blades cannot animate independently. See `public/models/ATTRIBUTION.md` for attribution. Cloud and precipitation effects are omitted because those variables are not fetched.
+Predicted power is normalized per turbine from 0 to 1. It is not MW. No February actual generation data is bundled, so the interface does not claim forecast accuracy or production energy. Times are displayed in Asia/Almaty (UTC+5).
 
-The scene is lazy-loaded and requires WebGL. Tests mock the canvas; inspect appearance, placement, and pointer behavior in a WebGL browser separately.
+## Data and sources
+
+`src/data/february2026.json` is generated from `artifacts/february_latest_forecast.csv`, `artifacts/backtest_2026-01-31_2026-02-28.csv`, and the matching archived `artifacts/weather/*.json` using `scripts/export_frontend_data.py`. The month view takes the latest forecast for each February hour. The 24/48-hour view takes one selected archived issue. Weather fields are aligned by valid UTC hour and turbine.
+
+`src/data/shelek-terrain.json` is a baked elevation grid for the turbine site and surrounding mountains, plus mapped waterways and tracks. `scripts/export_terrain.py` fetches the [Mapzen Terrain Tiles public dataset](https://registry.opendata.aws/terrain-tiles/) and [OpenStreetMap](https://www.openstreetmap.org/copyright) map data. The browser loads the local file without a map key. Field, soil, grass, and bank colors are artistic treatments of the terrain, not verified land cover or measured river width.
+
+The local wind animation fetches 100 m speed and direction from the [Open-Meteo Single Runs API](https://open-meteo.com/en/docs/single-runs-api) when the terrain view opens. The `runTime` stored with each February issue ensures the request uses that issue's ECMWF forecast run. The response is cached for hour scrubbing, validated, and limited to 12 seconds. If the API fails, the animation uses bundled weather and the on-screen badge names the fallback.
+
+The local `artifacts/weather/` cache is required only when regenerating the forecast JSON. Regenerate from the repository root with:
+
+```sh
+uv run python scripts/export_frontend_data.py --latest artifacts/february_latest_forecast.csv --backtest artifacts/backtest_2026-01-31_2026-02-28.csv --weather-dir artifacts/weather --output frontend/src/data/february2026.json
+uv run python scripts/export_terrain.py
+```
+
+The terrain script needs network access and Pillow. The map data and forecast JSON are already bundled for normal development.
+
+## Verification limits
+
+Automated DOM tests mock the 3D canvas. Run the app in a WebGL browser to inspect scene appearance and transitions. The optional supplied turbine GLB is available in Display settings; the procedural turbine remains the default.

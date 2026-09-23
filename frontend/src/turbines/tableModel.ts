@@ -1,15 +1,16 @@
-import type { ForecastHour, Reading, Turbine } from '../forecast/forecast';
+import type { ForecastHour, Reading, Turbine, TurbineStatus } from '../forecast/forecast';
 
 export interface TurbineRow extends Turbine { reading?: Reading }
 export type TurbineSort = 'wind-desc' | 'wind-asc' | 'power-desc' | 'name';
-export interface TurbineFilters { query: string; selectedOnly: boolean; sort: TurbineSort }
-export const DEFAULT_FILTERS: TurbineFilters = { query: '', selectedOnly: false, sort: 'wind-desc' };
+export interface TurbineFilters { query: string; status: 'all' | TurbineStatus; selectedOnly: boolean; sort: TurbineSort }
+export const DEFAULT_FILTERS: TurbineFilters = { query: '', status: 'all', selectedOnly: false, sort: 'wind-desc' };
 export const PAGE_SIZE = 8;
 
 export function filterTurbines(rows: TurbineRow[], filters: TurbineFilters, selected: readonly string[]): TurbineRow[] {
   const query = filters.query.trim().toLowerCase();
   return rows.filter(row =>
     (!query || `${row.id} ${row.name}`.toLowerCase().includes(query)) &&
+    (filters.status === 'all' || row.status === filters.status) &&
     (!filters.selectedOnly || selected.includes(row.id)),
   ).sort((a, b) => {
     if (filters.sort === 'name') return a.id.localeCompare(b.id, undefined, { numeric: true });

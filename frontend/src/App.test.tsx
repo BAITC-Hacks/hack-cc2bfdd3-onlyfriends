@@ -18,7 +18,7 @@ describe('forecast dashboard', () => {
     await screen.findByTestId('scene-state');
     expect(screen.getByText('2 TURBINES · LIVE')).toBeTruthy();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith('/api/forecast?mode=live');
-    expect(screen.getByText('2.1')).toBeTruthy();
+    expect(screen.getByTestId('forecast-power').textContent).toContain('0.021');
     fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: '2' } });
     expect(screen.getByTestId('scene-state').textContent).toContain('2/');
     const initialScene = screen.getByTestId('scene-state').textContent;

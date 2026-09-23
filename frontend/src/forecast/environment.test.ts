@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { environmentAt } from './environment';
-import { fixture } from './testFixture';
+import { createForecast } from './forecast';
 
 describe('forecast environment in UTC+5', () => {
   it.each([[2, 'night'], [7, 'sunrise'], [13, 'day'], [19, 'sunset'], [23, 'night']])('classifies hour %s as %s', (hour, expected) => {
@@ -14,9 +14,13 @@ describe('forecast environment in UTC+5', () => {
     expect(environmentAt('2026-02-28T20:00:00Z').hour).toBe(1);
     expect(() => environmentAt('invalid')).toThrow();
   });
-  it('changes season across a recorded 48-hour forecast issue', () => {
-    const response = fixture('historical', '2026-02-27T19:00:00Z');
-    expect(environmentAt(response.weather[0].valid_time_utc).season).toBe('winter');
-    expect(environmentAt(response.weather[response.weather.length - 1].valid_time_utc).season).toBe('spring');
+  it('generates date-specific hourly fixtures across a season boundary', () => {
+    const hours = createForecast('2026-02-28');
+    expect(hours).toHaveLength(48);
+    expect(environmentAt(hours[0].at).season).toBe('winter');
+    expect(environmentAt(hours[47].at).season).toBe('spring');
+    expect(hours[0].readings[0].temperature).toBeTypeOf('number');
+    expect(() => createForecast('2026-07-01')).toThrow();
+    expect(() => createForecast('2026-02-30')).toThrow();
   });
 });
