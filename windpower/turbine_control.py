@@ -15,6 +15,10 @@ def run_turbine_control(raw_dir: Path, artifacts_dir: Path) -> dict:
     """Fit each turbine on past labels and score identical outer issue-month rows."""
     history, examples, provenance = load_search_inputs(raw_dir, artifacts_dir)
     output = Path(artifacts_dir) / "model_search"
+    selection = json.loads((output / "selection.json").read_text(encoding="utf-8"))
+    for field in ("raw_sha256", "weather_archive_sha256"):
+        if selection[field] != provenance[field]:
+            raise ValueError(f"control inputs differ from model search: {field}")
     reference = pd.read_csv(output / "outer_monthly.csv")
     reference = reference.loc[reference.family == "incumbent"].set_index("month")
     if set(reference.index) != set(VALIDATION_MONTHS) or reference.index.has_duplicates:
