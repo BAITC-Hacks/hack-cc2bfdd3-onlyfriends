@@ -10,12 +10,11 @@ import { environmentAt } from './forecast/environment';
 import { TurbinesPage } from './turbines/TurbinesPage';
 import { toggleSelection } from './turbines/tableModel';
 import { useWindAt } from './scene/useWindAt';
-import { OperationsPanel } from './operations/OperationsPanel';
 
 const PlanetScene = lazy(() => import('./scene/PlanetScene'));
 type Mode = 'historical' | 'live';
-type View = 'overview' | 'turbines' | 'analytics' | 'operations';
-const views: View[] = ['overview', 'turbines', 'analytics', 'operations'];
+type View = 'overview' | 'turbines' | 'analytics';
+const views: View[] = ['overview', 'turbines', 'analytics'];
 
 function viewFromHash(): View {
   const value = window.location.hash.slice(1);
@@ -87,7 +86,7 @@ export default function App() {
   const runTime = mode === 'historical' ? document?.metadata.run_time_utc ?? '' : '';
   const wind = useWindAt(runTime, current?.at ?? '', {
     speed: focusReading?.windSpeed ?? 0, direction: focusReading?.direction ?? 0,
-  }, focusTurbine.lat, focusTurbine.lon, Boolean(runTime && current && zoom > 3 && view !== 'turbines' && view !== 'operations'));
+  }, focusTurbine.lat, focusTurbine.lon, Boolean(runTime && current && zoom > 3 && view !== 'turbines'));
 
   function navigate(next: View) {
     setView(next); setInfoOpen(false); setSettingsOpen(false);
@@ -112,7 +111,6 @@ export default function App() {
     </div>
     {(loading || error) && <section className="forecast-status" role="status"><strong>{loading ? 'Loading forecast…' : 'Forecast unavailable'}</strong>{error && <p>{error}</p>}{error?.startsWith('MODEL_UNAVAILABLE') && <p>Configure the trained normalized-power model on the Python server, then refresh.</p>}</section>}
     {view === 'turbines' && document && current && <TurbinesPage hour={current} turbines={document.turbines} mode={mode} selected={selected} onSelection={setSelected} onView3D={() => navigate('overview')} />}
-    {view === 'operations' && document && <OperationsPanel document={document} onHour={value => { setHour(value); setPlaying(false); navigate('overview'); }} />}
     {(view === 'overview' || view === 'analytics') && document && current && environment && <section className="world-section" aria-label="Interactive wind farm overview">
       <div className={`planet-stage ${zoom > 3.2 ? 'local' : ''}`}><Suspense fallback={<div className="scene-loading">Growing your little world…</div>}><PlanetScene hour={current} turbines={document.turbines} selected={selected} onSelect={id => setSelected(values => toggleSelection(values, id))} environment={environment} reset={reset} zoom={zoom} onZoom={setZoom} settings={settings} wind={wind} /></Suspense></div>
       <div className="hero-copy"><span className="eyebrow">Shelek · {mode === 'historical' ? 'February 2026' : 'Live forecast'}</span><h1>A closer look<br /><span>at the wind.</span></h1><div className="environment-label" aria-label="Scene environment"><Icon name={environment.timeOfDay === 'night' ? 'moon' : 'sun'} size={12} /><span>{environment.season} · {environment.timeOfDay}</span></div></div>

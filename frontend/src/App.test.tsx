@@ -38,17 +38,6 @@ describe('forecast dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset planet view' }));
     expect(screen.getByRole('button', { name: '1×' }).getAttribute('aria-pressed')).toBe('true');
   });
-  it('shows operational signals, agent audit, and opens the flagged hour', async () => {
-    window.history.replaceState(null, '', '#operations');
-    render(<App />);
-    await screen.findByRole('heading', { name: 'Forecast intelligence' });
-    expect(screen.getByText('51.0%')).toBeTruthy();
-    expect(screen.getByText('No earlier comparable issue with overlapping hours is saved yet.')).toBeTruthy();
-    expect(screen.getByText('assess operations')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /7h low-output window/ }));
-    expect(window.location.hash).toBe('#overview');
-    expect(await screen.findByTestId('scene-state')).toBeTruthy();
-  });
   it('checks live weather again after fifteen minutes while the page is visible', async () => {
     Object.defineProperty(window.document, 'visibilityState', { configurable: true, value: 'visible' });
     const intervals = vi.spyOn(window, 'setInterval');
