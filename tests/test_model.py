@@ -84,6 +84,33 @@ def test_fixed_blend_averages_direct_and_wind_corrected_models():
     np.testing.assert_allclose(model.predict(bundle, weather)["predicted_power"], [0.3, 0.7])
 
 
+def test_blend_clips_each_component_before_averaging():
+    weather = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
+
+    class Constant:
+        def __init__(self, value):
+            self.value = value
+
+        def predict(self, frame):
+            return np.full(len(frame), self.value)
+
+    blend = model.BlendModel(Constant(1.3), Constant(0.5))
+    bundle = {"candidate": "blend_50", "model": blend, "model_version": "clip-test"}
+    assert model.predict(bundle, weather).predicted_power.iloc[0] == pytest.approx(0.75)
+
+
+def test_issue_month_fold_retains_next_month_target_hour():
+    examples = pd.DataFrame({
+        "issue_time_utc": pd.to_datetime(["2025-09-14 19:00Z", "2025-10-30 19:00Z"]),
+        "valid_time_utc": pd.to_datetime(["2025-09-15 00:00Z", "2025-10-31 20:00Z"]),
+    })
+
+    train, valid = next(model.rolling_folds(examples, ["2025-10"]))
+
+    assert len(train) == 1
+    assert valid.valid_time_utc.tolist() == [pd.Timestamp("2025-10-31 20:00Z")]
+
+
 def test_model_version_tracks_wind_calibration_labels():
     frame = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
     examples = model.make_features(frame)

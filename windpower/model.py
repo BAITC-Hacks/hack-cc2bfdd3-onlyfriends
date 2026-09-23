@@ -80,22 +80,21 @@ class BlendModel:
         self.two_stage = two_stage
 
     def predict(self, frame: pd.DataFrame) -> np.ndarray:
-        direct = self.direct.predict(frame[FEATURE_COLUMNS])
-        corrected = self.two_stage.predict(frame)
-        return 0.5 * np.asarray(direct) + 0.5 * np.asarray(corrected)
+        direct = np.clip(np.asarray(self.direct.predict(frame[FEATURE_COLUMNS]), dtype=float), 0, 1)
+        corrected = np.clip(np.asarray(self.two_stage.predict(frame), dtype=float), 0, 1)
+        return 0.5 * direct + 0.5 * corrected
 
 
 def rolling_folds(examples: pd.DataFrame, months: list[str] = VALIDATION_MONTHS,
                   minimum_coverage: float = 0.0):
     """Expanding training periods with a clean monthly holdout before February."""
     times = pd.to_datetime(examples["valid_time_utc"], utc=True)
+    issues = pd.to_datetime(examples["issue_time_utc"], utc=True) if "issue_time_utc" in examples else times
     for month in months:
         start = pd.Timestamp(f"{month}-01", tz="Asia/Almaty").tz_convert("UTC")
         end = (pd.Timestamp(f"{month}-01", tz="Asia/Almaty") + pd.DateOffset(months=1)).tz_convert("UTC")
-        train = examples.loc[times < min(start, CUTOFF)].copy()
-        valid_mask = (times >= start) & (times < min(end, CUTOFF))
-        if "issue_time_utc" in examples:
-            valid_mask &= pd.to_datetime(examples["issue_time_utc"], utc=True) >= start
+        train = examples.loc[(times < start) & (issues < start)].copy()
+        valid_mask = (issues >= start) & (issues < end) & (times < CUTOFF)
         valid = examples.loc[valid_mask].copy()
         if train.empty or valid.empty:
             raise ValueError(f"missing training or validation rows for {month}")
