@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { fixture } from './forecast/testFixture';
 
@@ -16,8 +16,8 @@ describe('forecast dashboard', () => {
   it('renders the loaded model output and synchronizes selected turbine and hour', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
-    expect(screen.getByText('2 TURBINES · LIVE')).toBeTruthy();
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith('/api/forecast?mode=live');
+    expect(screen.getByText('2 TURBINES · HISTORICAL')).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining('mode=historical'));
     expect(screen.getByTestId('forecast-power').textContent).toContain('0.021');
     fireEvent.change(screen.getByLabelText('Explore a turbine'), { target: { value: '2' } });
     expect(screen.getByTestId('scene-state').textContent).toContain('2/');
@@ -43,7 +43,7 @@ describe('forecast dashboard', () => {
     render(<App />);
     await screen.findByRole('heading', { name: 'Forecast intelligence' });
     expect(screen.getByText('51.0%')).toBeTruthy();
-    expect(screen.getByText('No earlier comparable retrieval with overlapping hours is saved yet.')).toBeTruthy();
+    expect(screen.getByText('No earlier comparable issue with overlapping hours is saved yet.')).toBeTruthy();
     expect(screen.getByText('assess operations')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /7h low-output window/ }));
     expect(window.location.hash).toBe('#overview');
@@ -55,6 +55,8 @@ describe('forecast dashboard', () => {
     try {
       render(<App />);
       await screen.findByTestId('scene-state');
+      fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'live' } });
+      await screen.findByText('2 TURBINES · LIVE');
       const initialCalls = vi.mocked(fetch).mock.calls.length;
       const poll = intervals.mock.calls.find(([, delay]) => delay === 15 * 60 * 1000)?.[0] as (() => void) | undefined;
       expect(poll).toBeTruthy();
@@ -65,13 +67,15 @@ describe('forecast dashboard', () => {
   it('shows model-unavailable status without a forecast or false power', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error_code: 'MODEL_UNAVAILABLE', message: 'Trained power model file is missing.' }) }));
     render(<App />);
-    expect((await screen.findByRole('status')).textContent).toContain('MODEL_UNAVAILABLE');
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('MODEL_UNAVAILABLE'));
     expect(screen.queryByLabelText('Forecast metrics')).toBeNull();
     expect(screen.queryByTestId('scene-state')).toBeNull();
   });
   it('keeps the hackathon date range in historical replay only', async () => {
     render(<App />);
     await screen.findByTestId('scene-state');
+    expect(screen.getByLabelText('Issue date')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'live' } });
     expect(screen.queryByLabelText('Issue date')).toBeNull();
     fireEvent.change(screen.getByLabelText('Forecast mode'), { target: { value: 'historical' } });
     const date = screen.getByLabelText('Issue date') as HTMLInputElement;

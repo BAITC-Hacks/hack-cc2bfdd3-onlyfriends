@@ -23,7 +23,7 @@ function viewFromHash(): View {
 }
 
 export default function App() {
-  const [mode, setMode] = useState<Mode>('live');
+  const [mode, setMode] = useState<Mode>('historical');
   const [date, setDate] = useState(DEFAULT_DATE);
   const [liveDate, setLiveDate] = useState('');
   const [revision, setRevision] = useState(0);
