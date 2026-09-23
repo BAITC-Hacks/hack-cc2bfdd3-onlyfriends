@@ -1,10 +1,13 @@
 .venv/
+.env
+.env.*
+!.env.example
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
 raw/
 artifacts/
 .superpowers/
 .worktrees/
 *.pyc
-*.egg-info/
