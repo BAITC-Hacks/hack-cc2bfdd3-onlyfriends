@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
 from windpower.features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS, WEATHER_FEATURE_COLUMNS, make_features
+from windpower.reporting import write_validation_report
 from windpower.validation import BLENDS, CUTOFF, VALIDATION_MONTHS, choose_candidate, daily_scores, rolling_folds, score
 
 
@@ -209,6 +210,8 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     pd.DataFrame(turbine_scores).to_csv(output_dir / "validation_metrics_by_turbine.csv", index=False)
     pd.DataFrame(issue_day_scores).to_csv(output_dir / "validation_metrics_by_issue_day.csv", index=False)
     winner = choose_candidate(metrics)
+    write_validation_report(output_dir, metrics, pd.DataFrame(turbine_scores),
+                            pd.DataFrame(issue_day_scores), winner)
     bundle = fit_at_cutoff(winner, examples, history, cutoff, output_dir)
     early_scores = metrics.loc[metrics.month < "2026-01"].copy()
     early_winner = choose_candidate(early_scores)

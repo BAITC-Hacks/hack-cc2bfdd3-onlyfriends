@@ -14,6 +14,10 @@ def verify(root: Path) -> dict:
     latest = pd.read_csv(root / "february_latest_forecast.csv")
     metrics = pd.read_csv(root / "model" / "validation_metrics.csv")
     daily = pd.read_csv(root / "model" / "validation_metrics_by_issue_day.csv")
+    comparison = pd.read_csv(root / "model" / "validation_comparison.csv")
+    coverage = pd.read_csv(root / "model" / "validation_issue_coverage.csv")
+    paired = pd.read_csv(root / "model" / "validation_paired_day_deltas.csv")
+    uncertainty = json.loads((root / "model" / "validation_paired_day_summary.json").read_text())
     metadata = [json.loads((root / "model" / name).read_text())
                 for name in ("early_model_metadata.json", "model_metadata.json")]
     trained_through = {item["model_version"]: pd.Timestamp(item["trained_through_utc"])
@@ -51,8 +55,8 @@ def verify(root: Path) -> dict:
     expected_latest = february.sort_values("issue_time_utc", ascending=False).drop_duplicates(
         ["valid_time_utc", "turbine_id"]
     )[["valid_time_utc", "turbine_id", "run_id"]]
-    comparison = latest.merge(expected_latest, on=["valid_time_utc", "turbine_id"], suffixes=("", "_expected"), validate="one_to_one")
-    assert len(comparison) == len(latest) and comparison.run_id.eq(comparison.run_id_expected).all()
+    latest_comparison = latest.merge(expected_latest, on=["valid_time_utc", "turbine_id"], suffixes=("", "_expected"), validate="one_to_one")
+    assert len(latest_comparison) == len(latest) and latest_comparison.run_id.eq(latest_comparison.run_id_expected).all()
     assert len(station) == 29 * 48
     assert station.unit.eq("one_turbine_nameplate_equivalent").all()
     expected_station = backtest.groupby(["run_id", "lead_hour"]).predicted_power.sum().sort_index()
@@ -62,6 +66,14 @@ def verify(root: Path) -> dict:
     assert metrics.issue_day_coverage.ge(0.8).all()
     assert not daily.duplicated(["issue_date", "candidate"]).any()
     assert set(daily.candidate) == set(metrics.candidate)
+    assert coverage.issue_days.sum() == 123
+    assert coverage.labelled_turbine_hours.sum() == metrics.loc[
+        metrics.candidate == metadata[1]["candidate"], "n"].sum()
+    assert (coverage.full_label_issues + coverage.partial_label_issues).eq(coverage.issue_days).all()
+    assert set(comparison.candidate) == {metadata[1]["candidate"]}
+    assert set(paired.reference) == {item["reference"] for item in uncertainty}
+    assert all(item["lower_95"] <= item["mean_delta_mae"] <= item["upper_95"]
+               for item in uncertainty)
     for run_id in backtest.run_id.unique():
         trace = json.loads((root / "runs" / f"{run_id}.json").read_text())
         artifact = Path(trace["model_artifact"])
