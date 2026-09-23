@@ -57,7 +57,7 @@ def history_digest(history: pd.DataFrame) -> str:
 
 def save_provenance(output_dir: Path, metadata: dict) -> dict:
     """Keep each model/source combination as an immutable provenance record."""
-    fields = ("model_version", "candidate", "trained_rows", "trained_through_utc",
+    fields = ("model_version", "candidate", "feature_columns", "trained_rows", "trained_through_utc",
               "training_cutoff_utc", "algorithm_version", "raw_sha256",
               "training_history_sha256", "weather_archive_sha256", "weather_start", "weather_end")
     record = {key: metadata[key] for key in fields if key in metadata}

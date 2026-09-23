@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 import { fixture } from './forecast/testFixture';
 
-vi.mock('./scene/PlanetScene', () => ({ default: ({ selected, hour }: { selected: string | null; hour: { at: string } }) => <div data-testid="scene-state">{selected}/{hour.at}</div> }));
+vi.mock('./scene/PlanetScene', () => ({ default: ({ selected, hour, zoom, environment }: { selected: string[]; hour: { at: string }; zoom: number; environment: { season: string } }) => <div data-testid="scene-state">{selected.join(',')}/{hour.at}/{zoom}/{environment.season}</div> }));
 beforeEach(() => {
   Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
   vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => ({ ok: true, json: async () => fixture(url.includes('mode=live') ? 'live' : 'historical') })));
@@ -26,6 +26,16 @@ describe('forecast dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: '24 hours' }));
     expect((screen.getByLabelText('Forecast hour') as HTMLInputElement).max).toBe('23');
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+  it('passes forecast time environment and 5x zoom to the scene', async () => {
+    render(<App />);
+    await screen.findByTestId('scene-state');
+    fireEvent.click(screen.getByRole('button', { name: '5×' }));
+    expect(screen.getByTestId('scene-state').textContent).toContain('/5/');
+    expect(screen.getByRole('button', { name: '5×' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('main').getAttribute('data-season')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset planet view' }));
+    expect(screen.getByRole('button', { name: '1×' }).getAttribute('aria-pressed')).toBe('true');
   });
   it('shows model-unavailable status without a forecast or false power', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error_code: 'MODEL_UNAVAILABLE', message: 'Trained power model file is missing.' }) }));

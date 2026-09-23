@@ -1,10 +1,23 @@
 import numpy as np
 import pandas as pd
 import pytest
+import joblib
 
 from windpower import model
 from windpower.features import FEATURE_COLUMNS
+from windpower.validation import daily_scores
 from tests.test_features import weather_rows
+
+
+class ConstantFramePredictor:
+    def __init__(self, value, columns=None):
+        self.value = value
+        self.columns = columns
+
+    def predict(self, frame):
+        if self.columns is not None:
+            assert list(frame.columns) == self.columns
+        return np.full(len(frame), self.value)
 
 
 def test_folds_never_train_on_validation_or_february():
@@ -84,6 +97,33 @@ def test_fixed_blend_averages_direct_and_wind_corrected_models():
     np.testing.assert_allclose(model.predict(bundle, weather)["predicted_power"], [0.3, 0.7])
 
 
+def test_blend_clips_each_component_before_averaging():
+    weather = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
+
+    class Constant:
+        def __init__(self, value):
+            self.value = value
+
+        def predict(self, frame):
+            return np.full(len(frame), self.value)
+
+    blend = model.BlendModel(Constant(1.3), Constant(0.5))
+    bundle = {"candidate": "blend_50", "model": blend, "model_version": "clip-test"}
+    assert model.predict(bundle, weather).predicted_power.iloc[0] == pytest.approx(0.75)
+
+
+def test_issue_month_fold_retains_next_month_target_hour():
+    examples = pd.DataFrame({
+        "issue_time_utc": pd.to_datetime(["2025-09-14 19:00Z", "2025-10-30 19:00Z"]),
+        "valid_time_utc": pd.to_datetime(["2025-09-15 00:00Z", "2025-10-31 20:00Z"]),
+    })
+
+    train, valid = next(model.rolling_folds(examples, ["2025-10"]))
+
+    assert len(train) == 1
+    assert valid.valid_time_utc.tolist() == [pd.Timestamp("2025-10-31 20:00Z")]
+
+
 def test_model_version_tracks_wind_calibration_labels():
     frame = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
     examples = model.make_features(frame)
@@ -98,3 +138,86 @@ def test_model_version_tracks_wind_calibration_labels():
     second = model.training_fingerprint(changed, history, "blend_50")
 
     assert first != second
+
+
+def test_legacy_blend_bundle_replays_original_feature_schema_and_math(tmp_path):
+    weather = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
+    old = model.BlendModel(ConstantFramePredictor(1.3, list(model.BASE_FEATURE_COLUMNS)),
+                           ConstantFramePredictor(0.5))
+    old.__dict__.pop("clip_components", None)
+    old.__dict__.pop("direct_features", None)
+    path = tmp_path / "old.joblib"
+    joblib.dump({"candidate": "blend_50", "model": old, "model_version": "old"}, path)
+
+    output = model.predict(joblib.load(path), weather)
+
+    assert output.predicted_power.iloc[0] == pytest.approx(0.9)
+
+
+def test_weather_feature_schema_changes_model_fingerprint(monkeypatch):
+    frame = weather_rows([pd.Timestamp("2026-01-31 12:00:00+00:00")])
+    examples = model.make_features(frame)
+    examples["power"] = 0.4
+    examples["measured_wind"] = 7.0
+    examples["measured_temp"] = 2.0
+    history = examples[["valid_time_utc", "turbine_id", "power", "measured_wind", "measured_temp"]].copy()
+    first = model.training_fingerprint(examples, history, "weather_d6_l10")
+    monkeypatch.setattr(model, "WEATHER_FEATURE_COLUMNS", model.WEATHER_FEATURE_COLUMNS + ["hour_sin"])
+
+    assert model.training_fingerprint(examples, history, "weather_d6_l10") != first
+
+
+def test_blend_needs_consistent_gain_over_direct_model():
+    scores = pd.DataFrame([
+        {"candidate": candidate, "month": month, "mae": error, "rmse": error + 0.02}
+        for candidate, errors in {
+            "baseline": [0.20] * 4,
+            "direct_d6_l10": [0.15] * 4,
+            "blend_50": [0.10, 0.10, 0.151, 0.151],
+        }.items()
+        for month, error in zip(model.VALIDATION_MONTHS, errors)
+    ])
+
+    assert model.choose_candidate(scores) == "direct_d6_l10"
+
+
+def test_weather_model_needs_consistent_gain_over_base_direct():
+    scores = pd.DataFrame([
+        {"candidate": candidate, "month": month, "mae": error, "rmse": error + 0.02}
+        for candidate, errors in {
+            "baseline": [0.20] * 4,
+            "direct_d6_l10": [0.15] * 4,
+            "weather_d6_l10": [0.08, 0.08, 0.16, 0.16],
+        }.items()
+        for month, error in zip(model.VALIDATION_MONTHS, errors)
+    ])
+
+    assert model.choose_candidate(scores) == "direct_d6_l10"
+
+
+def test_weather_blend_also_needs_consistent_gain_over_base_direct():
+    scores = pd.DataFrame([
+        {"candidate": candidate, "month": month, "mae": error, "rmse": error + 0.02}
+        for candidate, errors in {
+            "baseline": [0.4] * 4,
+            "direct_d6_l10": [0.2] * 4,
+            "weather_d6_l10": [0.19, 0.19, 0.19, 0.22],
+            "weather_blend_50": [0.201, 0.0, 0.0, 0.21],
+        }.items()
+        for month, error in zip(model.VALIDATION_MONTHS, errors)
+    ])
+
+    assert model.choose_candidate(scores) == "weather_d6_l10"
+
+
+def test_daily_scores_group_by_local_issue_and_retain_pairing_key():
+    frame = pd.DataFrame({
+        "issue_time_utc": pd.to_datetime(["2025-10-01T18:00Z", "2025-10-02T18:00Z"]),
+        "power": [0.2, 0.8], "lead_hour": [1, 30],
+    })
+
+    rows = daily_scores(frame, np.array([0.3, 0.6]), "2025-10", "direct_d4_l10")
+
+    assert [row["issue_date"] for row in rows] == ["2025-10-01", "2025-10-02"]
+    assert [row["mae"] for row in rows] == pytest.approx([0.1, 0.2])
+    assert all(row["candidate"] == "direct_d4_l10" for row in rows)

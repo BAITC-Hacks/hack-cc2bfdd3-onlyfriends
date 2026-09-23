@@ -1,7 +1,7 @@
 {
   "raw_sha256": "19a5c6d6217d057301252eb38d2ad5b36294bc6bbf0ea1da3e6545698c7641b5",
   "weather_archive_sha256": "ac2bc1aac9a584112844032cf6efa5d08cbea141b9d276c2887c08ca95a808a0",
-  "algorithm_version": "windpower-blend-v1",
+  "algorithm_version": "windpower-weather-v2",
   "weather_start": "2024-03-15",
   "weather_end": "2026-01-31",
   "history_rows": 48645,

@@ -1,0 +1,26 @@
+[
+  {
+    "candidate": "weather_d6_l10",
+    "reference": "direct_d6_l10",
+    "mean_delta_mae": -0.006035507432009798,
+    "lower_95": -0.00846658291099789,
+    "upper_95": -0.003546602671918595,
+    "winning_days": 81,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  },
+  {
+    "candidate": "weather_d6_l10",
+    "reference": "blend_50",
+    "mean_delta_mae": -0.00555232209693728,
+    "lower_95": -0.008145199157156417,
+    "upper_95": -0.0029460273509954596,
+    "winning_days": 78,
+    "issue_days": 123,
+    "bootstrap_samples": 10000,
+    "bootstrap_unit": "paired_issue_day_within_month",
+    "interpretation": "exploratory: these months were used for model selection"
+  }
+]

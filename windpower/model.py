@@ -1,13 +1,7 @@
-"""Fit and select power models with one shared candidate definition.
-
-Fitting and rolling validation stay together so the evaluated candidate is
-exactly the candidate refitted for issuance; splitting them would duplicate
-the feature and prediction contract.
-"""
+"""Fit versioned wind-power candidates and produce hourly forecasts."""
 
 from hashlib import sha256
 import json
-import calendar
 from pathlib import Path
 
 from catboost import CatBoostRegressor
@@ -16,12 +10,12 @@ import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
-from windpower.features import FEATURE_COLUMNS, make_features
+from windpower.features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS, WEATHER_FEATURE_COLUMNS, make_features
+from windpower.reporting import write_validation_report
+from windpower.validation import BLENDS, CUTOFF, VALIDATION_MONTHS, choose_candidate, daily_scores, rolling_folds, score
 
 
-VALIDATION_MONTHS = ["2025-10", "2025-11", "2025-12", "2026-01"]
-CUTOFF = pd.Timestamp("2026-02-01", tz="Asia/Almaty").tz_convert("UTC")
-ALGORITHM_VERSION = "windpower-blend-v1"
+ALGORITHM_VERSION = "windpower-weather-v2"
 EARLY_CUTOFF = pd.Timestamp("2026-01-31", tz="Asia/Almaty").tz_convert("UTC")
 CANDIDATES = {
     "baseline": None,
@@ -29,9 +23,16 @@ CANDIDATES = {
     "direct_d4_l10": {"depth": 4, "l2_leaf_reg": 10},
     "direct_d6_l3": {"depth": 6, "l2_leaf_reg": 3},
     "direct_d6_l10": {"depth": 6, "l2_leaf_reg": 10},
+    "weather_d4_l10": {"depth": 4, "l2_leaf_reg": 10},
+    "weather_d6_l10": {"depth": 6, "l2_leaf_reg": 10},
     "two_stage": None,
     "blend_50": None,
+    "weather_blend_50": None,
 }
+
+def candidate_features(name: str) -> list[str]:
+    """Return the model input schema for one fitted candidate."""
+    return list(WEATHER_FEATURE_COLUMNS if name.startswith("weather_") else BASE_FEATURE_COLUMNS)
 
 
 class PowerCurve:
@@ -56,75 +57,45 @@ class PowerCurve:
 class TwoStage:
     """Correct NWP wind to nacelle wind, then apply measured-wind power curve."""
 
+    def __init__(self, feature_columns: list[str] | None = None):
+        self.feature_columns = list(feature_columns or BASE_FEATURE_COLUMNS)
+
     def fit(self, examples: pd.DataFrame, history: pd.DataFrame) -> "TwoStage":
         self.wind_model = CatBoostRegressor(
             loss_function="RMSE", iterations=400, depth=4, learning_rate=0.04,
             l2_leaf_reg=10, random_seed=42, thread_count=4, verbose=False,
             allow_writing_files=False,
         )
-        self.wind_model.fit(examples[FEATURE_COLUMNS], examples["measured_wind"], cat_features=["turbine_id"])
+        columns = getattr(self, "feature_columns", BASE_FEATURE_COLUMNS)
+        self.wind_model.fit(examples[columns], examples["measured_wind"], cat_features=["turbine_id"])
         self.power_curve = PowerCurve().fit(history, "measured_wind")
         return self
 
     def predict(self, frame: pd.DataFrame) -> np.ndarray:
         corrected = frame[["turbine_id"]].copy()
-        corrected["measured_wind"] = np.maximum(0, self.wind_model.predict(frame[FEATURE_COLUMNS]))
+        columns = getattr(self, "feature_columns", BASE_FEATURE_COLUMNS)
+        corrected["measured_wind"] = np.maximum(0, self.wind_model.predict(frame[columns]))
         return self.power_curve.predict(corrected)
 
 
 class BlendModel:
     """Fixed equal-weight blend of the strongest direct model and wind correction."""
 
-    def __init__(self, direct, two_stage):
+    def __init__(self, direct, two_stage, direct_features: list[str] | None = None,
+                 clip_components: bool = True):
         self.direct = direct
         self.two_stage = two_stage
+        self.direct_features = list(direct_features or BASE_FEATURE_COLUMNS)
+        self.clip_components = clip_components
 
     def predict(self, frame: pd.DataFrame) -> np.ndarray:
-        direct = self.direct.predict(frame[FEATURE_COLUMNS])
-        corrected = self.two_stage.predict(frame)
-        return 0.5 * np.asarray(direct) + 0.5 * np.asarray(corrected)
-
-
-def rolling_folds(examples: pd.DataFrame, months: list[str] = VALIDATION_MONTHS,
-                  minimum_coverage: float = 0.0):
-    """Expanding training periods with a clean monthly holdout before February."""
-    times = pd.to_datetime(examples["valid_time_utc"], utc=True)
-    for month in months:
-        start = pd.Timestamp(f"{month}-01", tz="Asia/Almaty").tz_convert("UTC")
-        end = (pd.Timestamp(f"{month}-01", tz="Asia/Almaty") + pd.DateOffset(months=1)).tz_convert("UTC")
-        train = examples.loc[times < min(start, CUTOFF)].copy()
-        valid_mask = (times >= start) & (times < min(end, CUTOFF))
-        if "issue_time_utc" in examples:
-            valid_mask &= pd.to_datetime(examples["issue_time_utc"], utc=True) >= start
-        valid = examples.loc[valid_mask].copy()
-        if train.empty or valid.empty:
-            raise ValueError(f"missing training or validation rows for {month}")
-        days = calendar.monthrange(int(month[:4]), int(month[5:]))[1]
-        issue_days = pd.to_datetime(valid.issue_time_utc, utc=True).dt.tz_convert("Asia/Almaty").dt.date.nunique() if "issue_time_utc" in valid else days
-        coverage = issue_days / days
-        if coverage < minimum_coverage:
-            raise ValueError(f"validation archive coverage for {month} is {coverage:.1%}; minimum {minimum_coverage:.1%}")
-        valid.attrs["issue_day_coverage"] = coverage
-        valid.attrs["issue_days"] = issue_days
-        valid.attrs["expected_issue_days"] = days
-        yield train, valid
-
-
-def choose_candidate(scores: pd.DataFrame) -> str:
-    """Use average monthly MAE; require repeatable improvement over baseline."""
-    average = scores.groupby("candidate").agg(
-        mean_mae=("mae", "mean"), worst_mae=("mae", "max"), mean_rmse=("rmse", "mean"),
-    )
-    if "baseline" not in average.index:
-        raise ValueError("baseline scores required")
-    baseline = scores.loc[scores.candidate == "baseline", ["month", "mae"]].set_index("month")["mae"]
-    eligible = ["baseline"]
-    for candidate in average.index.drop("baseline"):
-        monthly = scores.loc[scores.candidate == candidate, ["month", "mae"]].set_index("month")["mae"]
-        paired = baseline.to_frame("baseline").join(monthly.rename("candidate"), how="inner")
-        if len(paired) == len(baseline) and (paired.candidate < paired.baseline).sum() >= max(2, len(paired) // 2 + 1):
-            eligible.append(candidate)
-    return str(average.loc[eligible].sort_values(["mean_mae", "worst_mae", "mean_rmse"]).index[0])
+        columns = getattr(self, "direct_features", BASE_FEATURE_COLUMNS)
+        direct = np.asarray(self.direct.predict(frame[columns]), dtype=float)
+        corrected = np.asarray(self.two_stage.predict(frame), dtype=float)
+        if getattr(self, "clip_components", False):
+            direct = np.clip(direct, 0, 1)
+            corrected = np.clip(corrected, 0, 1)
+        return 0.5 * direct + 0.5 * corrected
 
 
 def _fit_candidate(name: str, examples: pd.DataFrame, history: pd.DataFrame):
@@ -132,10 +103,12 @@ def _fit_candidate(name: str, examples: pd.DataFrame, history: pd.DataFrame):
         return PowerCurve().fit(examples, "wind_speed_100m")
     if name == "two_stage":
         return TwoStage().fit(examples, history)
-    if name == "blend_50":
+    if name in BLENDS:
+        direct_name = BLENDS[name]
         return BlendModel(
-            _fit_candidate("direct_d6_l10", examples, history),
+            _fit_candidate(direct_name, examples, history),
             _fit_candidate("two_stage", examples, history),
+            direct_features=candidate_features(direct_name),
         )
     settings = CANDIDATES[name]
     regressor = CatBoostRegressor(
@@ -143,36 +116,24 @@ def _fit_candidate(name: str, examples: pd.DataFrame, history: pd.DataFrame):
         random_seed=42, thread_count=4, verbose=False, allow_writing_files=False,
         **settings,
     )
-    regressor.fit(examples[FEATURE_COLUMNS], examples["power"], cat_features=["turbine_id"])
+    regressor.fit(examples[candidate_features(name)], examples["power"], cat_features=["turbine_id"])
     return regressor
 
 
-def _predict_candidate(name: str, fitted, features: pd.DataFrame) -> np.ndarray:
-    source = features if name in ("two_stage", "baseline", "blend_50") else features[FEATURE_COLUMNS]
+def _predict_candidate(name: str, fitted, features: pd.DataFrame,
+                       feature_columns: list[str] | None = None) -> np.ndarray:
+    source = features if name in ("two_stage", "baseline", *BLENDS) else features[feature_columns or candidate_features(name)]
     return np.clip(np.asarray(fitted.predict(source), dtype=float), 0, 1)
-
-
-def _score(actual: pd.Series, forecast: np.ndarray, lead: pd.Series) -> dict:
-    error = forecast - actual.to_numpy()
-    first = lead.to_numpy() <= 24
-    second = ~first
-    return {
-        "mae": float(np.mean(np.abs(error))),
-        "rmse": float(np.sqrt(np.mean(error ** 2))),
-        "bias": float(np.mean(error)),
-        "mae_h1_24": float(np.mean(np.abs(error[first]))) if first.any() else float("nan"),
-        "mae_h25_48": float(np.mean(np.abs(error[second]))) if second.any() else float("nan"),
-        "n": len(error),
-    }
 
 
 def training_fingerprint(examples: pd.DataFrame, history: pd.DataFrame, candidate: str) -> str:
     """Version all fitting inputs and chosen algorithm, including wind labels."""
     digest = sha256(json.dumps(
-        {"algorithm": ALGORITHM_VERSION, "candidate": candidate, "grid": CANDIDATES}, sort_keys=True
+        {"algorithm": ALGORITHM_VERSION, "candidate": candidate, "grid": CANDIDATES,
+         "features": candidate_features(candidate)}, sort_keys=True
     ).encode())
     for frame, columns in (
-        (examples, ["issue_time_utc", "valid_time_utc", *FEATURE_COLUMNS, "power", "measured_wind", "measured_temp"]),
+        (examples, ["issue_time_utc", "valid_time_utc", *candidate_features(candidate), "power", "measured_wind", "measured_temp"]),
         (history, ["valid_time_utc", "turbine_id", "power", "measured_wind", "measured_temp"]),
     ):
         digest.update(pd.util.hash_pandas_object(frame[columns], index=False).values.tobytes())
@@ -194,6 +155,7 @@ def fit_at_cutoff(candidate: str, examples: pd.DataFrame, history: pd.DataFrame,
         "trained_through_utc": safe_examples.valid_time_utc.max().isoformat(),
         "training_cutoff_utc": cutoff.isoformat(),
         "algorithm_version": ALGORITHM_VERSION,
+        "feature_columns": candidate_features(candidate),
     }
     version_dir = output_dir / "versions"
     version_dir.mkdir(parents=True, exist_ok=True)
@@ -213,35 +175,43 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
     safe_history = history.loc[pd.to_datetime(history.valid_time_utc, utc=True) < cutoff].copy()
     scores = []
     turbine_scores = []
+    issue_day_scores = []
     for month, (train, valid) in zip(VALIDATION_MONTHS, rolling_folds(safe_examples, minimum_coverage=0.8)):
         start = pd.Timestamp(f"{month}-01", tz="Asia/Almaty").tz_convert("UTC")
         past_history = safe_history.loc[safe_history.valid_time_utc < start]
         forecasts = {}
         for name in CANDIDATES:
-            if name == "blend_50":
+            if name in BLENDS:
                 continue
             fitted = _fit_candidate(name, train, past_history)
             forecast = _predict_candidate(name, fitted, valid)
             forecasts[name] = forecast
+            issue_day_scores.extend(daily_scores(valid, forecast, month, name))
             scores.append({"month": month, "candidate": name, "issue_days": valid.attrs["issue_days"],
                            "expected_issue_days": valid.attrs["expected_issue_days"],
                            "issue_day_coverage": valid.attrs["issue_day_coverage"],
-                           **_score(valid.power, forecast, valid.lead_hour)})
+                           **score(valid.power, forecast, valid.lead_hour)})
             for turbine_id, positions in valid.groupby("turbine_id").indices.items():
                 group = valid.iloc[positions]
-                turbine_scores.append({"month": month, "candidate": name, "turbine_id": turbine_id, **_score(group.power, forecast[positions], group.lead_hour)})
-        blended = 0.5 * forecasts["direct_d6_l10"] + 0.5 * forecasts["two_stage"]
-        scores.append({"month": month, "candidate": "blend_50", "issue_days": valid.attrs["issue_days"],
-                       "expected_issue_days": valid.attrs["expected_issue_days"],
-                       "issue_day_coverage": valid.attrs["issue_day_coverage"],
-                       **_score(valid.power, blended, valid.lead_hour)})
-        for turbine_id, positions in valid.groupby("turbine_id").indices.items():
-            group = valid.iloc[positions]
-            turbine_scores.append({"month": month, "candidate": "blend_50", "turbine_id": turbine_id, **_score(group.power, blended[positions], group.lead_hour)})
+                turbine_scores.append({"month": month, "candidate": name, "turbine_id": turbine_id, **score(group.power, forecast[positions], group.lead_hour)})
+        for blend_name, direct_name in BLENDS.items():
+            blended = 0.5 * forecasts[direct_name] + 0.5 * forecasts["two_stage"]
+            issue_day_scores.extend(daily_scores(valid, blended, month, blend_name))
+            scores.append({"month": month, "candidate": blend_name, "issue_days": valid.attrs["issue_days"],
+                           "expected_issue_days": valid.attrs["expected_issue_days"],
+                           "issue_day_coverage": valid.attrs["issue_day_coverage"],
+                           **score(valid.power, blended, valid.lead_hour)})
+            for turbine_id, positions in valid.groupby("turbine_id").indices.items():
+                group = valid.iloc[positions]
+                turbine_scores.append({"month": month, "candidate": blend_name, "turbine_id": turbine_id,
+                                       **score(group.power, blended[positions], group.lead_hour)})
     metrics = pd.DataFrame(scores)
     metrics.to_csv(output_dir / "validation_metrics.csv", index=False)
     pd.DataFrame(turbine_scores).to_csv(output_dir / "validation_metrics_by_turbine.csv", index=False)
+    pd.DataFrame(issue_day_scores).to_csv(output_dir / "validation_metrics_by_issue_day.csv", index=False)
     winner = choose_candidate(metrics)
+    write_validation_report(output_dir, metrics, pd.DataFrame(turbine_scores),
+                            pd.DataFrame(issue_day_scores), winner)
     bundle = fit_at_cutoff(winner, examples, history, cutoff, output_dir)
     early_scores = metrics.loc[metrics.month < "2026-01"].copy()
     early_winner = choose_candidate(early_scores)
@@ -260,7 +230,8 @@ def select_and_train(examples: pd.DataFrame, history: pd.DataFrame, output_dir: 
 def predict(bundle: dict, weather: pd.DataFrame) -> pd.DataFrame:
     """Forecast normalized power for each provided turbine and valid hour."""
     inputs = make_features(weather)
-    values = _predict_candidate(bundle["candidate"], bundle["model"], inputs)
+    values = _predict_candidate(bundle["candidate"], bundle["model"], inputs,
+                                bundle.get("feature_columns"))
     result = inputs[["issue_time_utc", "run_time_utc", "valid_time_utc", "turbine_id", "lead_hour"]].copy()
     result["predicted_power"] = values
     result["model_version"] = bundle["model_version"]

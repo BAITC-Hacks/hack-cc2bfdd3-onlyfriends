@@ -1,0 +1,37 @@
+{
+  "naive": {
+    "window_days": 30
+  },
+  "isotonic": {
+    "wind_column": "wind_speed_100m"
+  },
+  "ridge": {
+    "model__alpha": 100.0
+  },
+  "elastic_net": {
+    "model__alpha": 0.001,
+    "model__l1_ratio": 0.7
+  },
+  "random_forest": {
+    "model__max_depth": 10,
+    "model__min_samples_leaf": 30
+  },
+  "extra_trees": {
+    "model__max_depth": 10,
+    "model__min_samples_leaf": 10
+  },
+  "hist_gradient_boosting": {
+    "model__l2_regularization": 1.0,
+    "model__max_leaf_nodes": 15
+  },
+  "catboost": {
+    "model__depth": 4,
+    "model__l2_leaf_reg": 10
+  },
+  "mlp": {
+    "model__alpha": 0.01,
+    "model__hidden_layer_sizes": [
+      32
+    ]
+  }
+}

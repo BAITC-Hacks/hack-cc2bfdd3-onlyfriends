@@ -13,6 +13,11 @@ def verify(root: Path) -> dict:
     station = pd.read_csv(root / "backtest_station_2026-01-31_2026-02-28.csv")
     latest = pd.read_csv(root / "february_latest_forecast.csv")
     metrics = pd.read_csv(root / "model" / "validation_metrics.csv")
+    daily = pd.read_csv(root / "model" / "validation_metrics_by_issue_day.csv")
+    comparison = pd.read_csv(root / "model" / "validation_comparison.csv")
+    coverage = pd.read_csv(root / "model" / "validation_issue_coverage.csv")
+    paired = pd.read_csv(root / "model" / "validation_paired_day_deltas.csv")
+    uncertainty = json.loads((root / "model" / "validation_paired_day_summary.json").read_text())
     metadata = [json.loads((root / "model" / name).read_text())
                 for name in ("early_model_metadata.json", "model_metadata.json")]
     trained_through = {item["model_version"]: pd.Timestamp(item["trained_through_utc"])
@@ -50,8 +55,8 @@ def verify(root: Path) -> dict:
     expected_latest = february.sort_values("issue_time_utc", ascending=False).drop_duplicates(
         ["valid_time_utc", "turbine_id"]
     )[["valid_time_utc", "turbine_id", "run_id"]]
-    comparison = latest.merge(expected_latest, on=["valid_time_utc", "turbine_id"], suffixes=("", "_expected"), validate="one_to_one")
-    assert len(comparison) == len(latest) and comparison.run_id.eq(comparison.run_id_expected).all()
+    latest_comparison = latest.merge(expected_latest, on=["valid_time_utc", "turbine_id"], suffixes=("", "_expected"), validate="one_to_one")
+    assert len(latest_comparison) == len(latest) and latest_comparison.run_id.eq(latest_comparison.run_id_expected).all()
     assert len(station) == 29 * 48
     assert station.unit.eq("one_turbine_nameplate_equivalent").all()
     expected_station = backtest.groupby(["run_id", "lead_hour"]).predicted_power.sum().sort_index()
@@ -59,6 +64,16 @@ def verify(root: Path) -> dict:
     np.testing.assert_allclose(observed_station.to_numpy(), expected_station.to_numpy())
     assert observed_station.index.equals(expected_station.index)
     assert metrics.issue_day_coverage.ge(0.8).all()
+    assert not daily.duplicated(["issue_date", "candidate"]).any()
+    assert set(daily.candidate) == set(metrics.candidate)
+    assert coverage.issue_days.sum() == 123
+    assert coverage.labelled_turbine_hours.sum() == metrics.loc[
+        metrics.candidate == metadata[1]["candidate"], "n"].sum()
+    assert (coverage.full_label_issues + coverage.partial_label_issues).eq(coverage.issue_days).all()
+    assert set(comparison.candidate) == {metadata[1]["candidate"]}
+    assert set(paired.reference) == {item["reference"] for item in uncertainty}
+    assert all(item["lower_95"] <= item["mean_delta_mae"] <= item["upper_95"]
+               for item in uncertainty)
     for run_id in backtest.run_id.unique():
         trace = json.loads((root / "runs" / f"{run_id}.json").read_text())
         artifact = Path(trace["model_artifact"])
@@ -74,13 +89,15 @@ def verify(root: Path) -> dict:
         assert sha256(provenance.read_bytes()).hexdigest() == trace["model_provenance_sha256"]
         source = metadata[0] if trace["model_version"] == metadata[0]["model_version"] else metadata[1]
         assert trace["training_weather_archive_sha256"] == source["weather_archive_sha256"]
+        assert source["feature_columns"]
         if source is metadata[0]:
             assert trace["training_raw_sha256"] is None
             assert trace["training_history_sha256"] == source["training_history_sha256"]
-    selected = metrics[metrics.candidate == "blend_50"].mae.mean()
+    selected = metrics[metrics.candidate == metadata[1]["candidate"]].mae.mean()
     baseline = metrics[metrics.candidate == "baseline"].mae.mean()
     return {"issues": issue.nunique(), "turbine_hour_predictions": len(backtest),
             "station_hour_predictions": len(station), "february_hour_predictions": len(latest),
+            "selected_candidate": metadata[1]["candidate"],
             "selection_mae": round(float(selected), 6), "baseline_mae": round(float(baseline), 6)}
 
 
