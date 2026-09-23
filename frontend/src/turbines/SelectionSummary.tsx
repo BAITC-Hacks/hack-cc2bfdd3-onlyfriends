@@ -5,10 +5,10 @@ import { selectionForecast } from './tableModel';
 export function SelectionSummary({ hour, selected }: { hour: ForecastHour; selected: string[] }) {
   const [mode, setMode] = useState<'aggregate' | 'individual'>('aggregate');
   const subset = selectionForecast(hour, selected);
-  const metrics = summarize(subset);
+  const metrics = subset.readings.length > 0 ? summarize(subset) : null;
   return <section className="selection-summary" aria-label="Selected turbine summary">
     <strong className="selection-count">{selected.length} selected</strong>
-    {subset.readings.length === 0 ? <p className="summary-empty">Select turbines to compare their forecast.</p> : mode === 'aggregate' ? <div className="summary-values">
+    {!metrics ? <p className="summary-empty">Select turbines to compare their forecast.</p> : mode === 'aggregate' ? <div className="summary-values">
       <div><strong>{metrics.power.toFixed(3)} / 1</strong><span>mean normalized power</span></div>
       <div><strong>{metrics.windSpeed.toFixed(1)} m/s</strong><span>avg wind</span></div>
       <div><strong>{metrics.temperature > 0 ? '+' : ''}{Math.round(metrics.temperature)}°C</strong><span>avg temperature</span></div>

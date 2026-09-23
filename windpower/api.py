@@ -1,6 +1,7 @@
 """Small HTTP bridge between the forecasting graph and the dashboard."""
 
 from datetime import datetime, timezone
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -17,17 +18,77 @@ from windpower.regional_weather import fetch_regional_context
 from windpower.weather import SITES
 
 
+def _february_csv_predictions(path: Path, issue: datetime) -> tuple[dict[tuple[str, pd.Timestamp], float], str]:
+    """Load the latest February power values that overlap this 48-hour window."""
+    frame = pd.read_csv(path)
+    required = {"valid_time_utc", "turbine_id", "predicted_power"}
+    if not required.issubset(frame.columns):
+        raise ValueError(f"February forecast CSV requires columns: {sorted(required)}")
+    frame = frame[list(required)].copy()
+    frame["valid_time_utc"] = pd.to_datetime(frame["valid_time_utc"], utc=True, errors="raise")
+    frame["turbine_id"] = frame["turbine_id"].astype(str)
+    frame["predicted_power"] = pd.to_numeric(frame["predicted_power"], errors="raise")
+    start = pd.Timestamp(issue).tz_convert("UTC") + pd.Timedelta(hours=1)
+    end = start + pd.Timedelta(hours=48)
+    frame = frame.loc[frame["valid_time_utc"].between(start, end, inclusive="left")]
+    if frame.duplicated(["turbine_id", "valid_time_utc"]).any():
+        raise ValueError("February forecast CSV has duplicate turbine-hour rows")
+    if not frame["predicted_power"].between(0, 1).all():
+        raise ValueError("February forecast CSV power must be within [0, 1]")
+    values = {
+        (row.turbine_id, row.valid_time_utc): float(row.predicted_power)
+        for row in frame.itertuples(index=False)
+    }
+    return values, sha256(path.read_bytes()).hexdigest()[:12]
+
+
+def _csv_backed_predictor(values, fallback=None):
+    """Prefer saved February predictions and use the trained model outside CSV coverage."""
+    def predict(features: pd.DataFrame) -> pd.DataFrame:
+        keys = features[["turbine_id", "lead_hour", "valid_time_utc"]].copy()
+        keys["turbine_id"] = keys["turbine_id"].astype(str)
+        keys["valid_time_utc"] = pd.to_datetime(keys["valid_time_utc"], utc=True)
+        saved = [values.get((row.turbine_id, row.valid_time_utc)) for row in keys.itertuples(index=False)]
+        if all(value is not None for value in saved):
+            keys["predicted_power"] = saved
+            return keys
+        if fallback is None:
+            raise ValueError("February forecast CSV does not cover all 48 forecast hours")
+        result = fallback(features).copy()
+        lookup = {(str(row.turbine_id), pd.Timestamp(row.valid_time_utc)): index
+                  for index, row in result.iterrows()}
+        for key, value in values.items():
+            if key in lookup:
+                result.loc[lookup[key], "predicted_power"] = value
+        return result
+    return predict
+
+
 def forecast_document(mode: str, issue: datetime, model_path: Path,
                       cache_dir: Path, output_dir: Path,
                       target_start: datetime | None = None,
-                      weather_snapshot: pd.DataFrame | None = None) -> tuple[int, dict]:
+                      weather_snapshot: pd.DataFrame | None = None,
+                      february_forecast_path: Path | None = None) -> tuple[int, dict]:
     """Run a real forecast and return the validated artifact as one UI document."""
     if mode not in {"historical", "live"}:
         return 400, {"status": "FAILED", "error_code": "INVALID_REQUEST", "message": "mode must be historical or live"}
-    try:
-        predictor, version = load_predictor(model_path, issue, mode)
-    except ModelUnavailable as error:
-        return 503, {"status": "FAILED", "error_code": "MODEL_UNAVAILABLE", "message": str(error)}
+    csv_values, csv_digest = {}, None
+    if mode == "historical" and february_forecast_path and february_forecast_path.is_file():
+        try:
+            csv_values, csv_digest = _february_csv_predictions(february_forecast_path, issue)
+        except (OSError, ValueError, pd.errors.ParserError) as error:
+            return 503, {"status": "FAILED", "error_code": "FORECAST_DATA_ERROR", "message": str(error)}
+    expected_rows = len(SITES) * 48
+    if len(csv_values) == expected_rows:
+        predictor, version = _csv_backed_predictor(csv_values), f"february-csv-{csv_digest}"
+    else:
+        try:
+            predictor, version = load_predictor(model_path, issue, mode)
+        except ModelUnavailable as error:
+            return 503, {"status": "FAILED", "error_code": "MODEL_UNAVAILABLE", "message": str(error)}
+        if csv_values:
+            predictor = _csv_backed_predictor(csv_values, predictor)
+            version = f"{version}+february-csv-{csv_digest}"
     agent = ForecastAgent(predictor, version, cache_dir, output_dir)
     result = agent.run(issue, mode=mode, target_start_utc=target_start,
                        preloaded_weather=weather_snapshot)
@@ -47,6 +108,11 @@ def forecast_document(mode: str, issue: datetime, model_path: Path,
         artifact["metadata"]["warnings"] = [
             "Weather run availability uses a seven-hour estimate; historical publication time is unverified."
         ]
+        if csv_values:
+            artifact["metadata"]["power_source"] = str(february_forecast_path)
+            artifact["metadata"]["warnings"].append(
+                f"Power predictions loaded from February CSV for {len(csv_values)} of {expected_rows} turbine-hours."
+            )
     for turbine_id, summary in artifact["analysis"].items():
         if summary.get("large_change_hours", 0):
             artifact["metadata"].setdefault("warnings", []).append(
@@ -115,6 +181,9 @@ class Handler(BaseHTTPRequestHandler):
             Path(os.getenv("WINDPOWER_CACHE_DIR", "artifacts/weather")),
             Path(os.getenv("WINDPOWER_OUTPUT_DIR", "artifacts/dashboard_runs")),
             target_start,
+            february_forecast_path=Path(os.getenv(
+                "WINDPOWER_FEBRUARY_FORECAST_PATH", "artifacts/february_latest_forecast.csv"
+            )),
         )
         self._send(status, document)
 
