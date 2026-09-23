@@ -20,9 +20,9 @@ Use the current task and the repository's authoritative project documentation to
 
 ## Repository Context
 
-This repository is a documentation scaffold for an agentic system that forecasts hourly wind farm power for the next 24–48 hours. The task and scope are documented in `README.md` and `docs/PROJECT_VISION.md`; the other files in `docs/` describe the proposed design and evaluation.
+This repository implements the first components of an agentic system that forecasts hourly wind farm power for the next 24–48 hours. The task and scope are documented in `README.md` and `docs/PROJECT_VISION.md`; the other files in `docs/` describe the design and evaluation.
 
-The repository currently has no application code or package manifest. Its `src/`, `tests/`, and `evals/` directories are placeholders. No technology stack or install, run, build, test, type-check, or lint commands are defined yet. Use commands only after they are added to the repository.
+Python code lives in `windpower/`, with tests in `tests/` and dependencies in `pyproject.toml` and `uv.lock`. The current agent in `windpower/agent.py` uses LangGraph for orchestration, a LangChain weather tool, and optional LangSmith tracing. The trained prediction model and complete February replay are still pending. The `src/` and `evals/` directories are placeholders. Run tests with `uv run --group dev pytest -q` after installing uv, or with an equivalent project environment.
 
 ---
 
