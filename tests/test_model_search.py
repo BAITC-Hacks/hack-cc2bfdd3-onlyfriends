@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
+from sklearn.pipeline import Pipeline
 
-from windpower.model_search import inner_cv_indices, search_examples
-from windpower.search_estimators import IsotonicWindRegressor, SeasonalMeanRegressor
+from windpower.features import WEATHER_FEATURE_COLUMNS
+from windpower.model_search import clipped_neg_mae, inner_cv_indices, search_examples
+from windpower.search_estimators import IsotonicWindRegressor, SeasonalMeanRegressor, candidate_grids
 
 
 def test_search_excludes_targets_after_october_cutoff_and_keeps_issue_folds():
@@ -47,3 +50,49 @@ def test_isotonic_curve_supports_both_turbines_and_wind_columns():
     fit = IsotonicWindRegressor(wind_column="wind_speed_100m").fit(frame, [0.1, 0.8, 0.2, 0.9])
 
     np.testing.assert_allclose(fit.predict(frame), [0.1, 0.8, 0.2, 0.9])
+
+
+def test_search_has_nine_cloneable_bounded_model_families():
+    choices = candidate_grids()
+
+    assert set(choices) == {"naive", "isotonic", "ridge", "elastic_net", "random_forest",
+                            "extra_trees", "hist_gradient_boosting", "catboost", "mlp"}
+    for estimator, grid in choices.values():
+        clone(estimator)
+        assert grid and all(1 <= len(values) <= 4 for values in grid.values())
+        if isinstance(estimator, Pipeline) and estimator.steps[0][0] == "prep":
+            assert estimator.steps[0][1].transformers
+
+
+def test_search_clips_predictions_before_mae():
+    class WildPredictor:
+        def predict(self, features):
+            return np.array([1.5, -0.5])
+
+    assert clipped_neg_mae(WildPredictor(), pd.DataFrame(index=[0, 1]),
+                           np.array([1.0, 0.0])) == 0.0
+
+
+def test_each_family_fits_small_forecast_frame():
+    n = 40
+    frame = pd.DataFrame({column: np.linspace(0.1, 1.0, n)
+                          for column in WEATHER_FEATURE_COLUMNS if column != "turbine_id"})
+    frame["turbine_id"] = ["1", "2"] * (n // 2)
+    frame["wind_speed_100m"] = np.linspace(2, 12, n)
+    frame["wind_speed_10m"] = np.linspace(1, 10, n)
+    frame.loc[::4, "wind_100m_lag_1h"] = np.nan
+    frame["valid_time_utc"] = pd.date_range("2025-06-01", periods=n, freq="h", tz="UTC")
+    target = np.linspace(0.1, 0.9, n)
+
+    for name, (estimator, grid) in candidate_grids().items():
+        params = {key: values[0] for key, values in grid.items()}
+        if name == "catboost":
+            params["model__iterations"] = 5
+        if name in ("random_forest", "extra_trees"):
+            params["model__n_estimators"] = 5
+        if name in ("hist_gradient_boosting", "mlp"):
+            params["model__max_iter"] = 5
+        if name == "mlp":
+            params["model__batch_size"] = 20
+        fitted = clone(estimator).set_params(**params).fit(frame, target)
+        assert np.isfinite(fitted.predict(frame)).all(), name
