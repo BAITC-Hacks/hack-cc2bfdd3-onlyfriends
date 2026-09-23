@@ -1,5 +1,10 @@
 # OnlyFriends — прогноз выработки ВЭС
 
+## Interactive frontend
+
+The React + TypeScript + Vite wind-planet demo is in [`frontend/`](frontend/README.md).
+Run `cd frontend`, `npm ci`, then `npm run dev`. Mock forecasts run independently of the Python pipeline.
+
 Проект для трека Самрук-Казына: почасовой прогноз выработки ветроэлектростанции на следующие 24–48 часов. Система должна ежедневно получать архивный прогноз погоды, доступный на дату запуска, готовить данные, рассчитывать и проверять прогноз, сохранять результат с происхождением данных.
 
 ## Статус
