@@ -1,62 +1,36 @@
-# OnlyFriends · Wind planet
+# OnlyFriends wind forecast dashboard
 
-A React + TypeScript + Vite concept dashboard with an original procedural eco planet, React Three Fiber, and drei. All forecasts and assistant responses are **local demo data**, with no backend or AI API connection.
+The React, TypeScript, Vite and React Three Fiber dashboard reads validated 48-hour forecasts from the Python API. It renders the two configured turbine coordinates. The scene never computes power; it uses normalized output from the trained model and archived or current weather from the server.
 
 ## Run
 
-Requires Node.js 22.14+ and npm.
+From the repository root:
 
-```sh
+```powershell
+uv sync
+uv run python -m windpower.api
+```
+
+The API loads `artifacts/model/model.joblib` by default. Override this trusted local path with `WINDPOWER_MODEL_PATH` if needed. The bundle must contain the fitted windpower model and its training metadata. For the 31 January 2026 historical issue, the API selects the earlier immutable model version. Without a compatible model, it returns `MODEL_UNAVAILABLE` and the dashboard shows no forecast values. Joblib files must come from a trusted source.
+
+In another terminal:
+
+```powershell
 cd frontend
 npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. From the workspace parent, first `cd hack-cc2bfdd3-onlyfriends`.
+Open http://127.0.0.1:5173. Vite forwards `/api` to `127.0.0.1:8000`. `npm test`, `npm run typecheck`, and `npm run build` validate the frontend. `uv run --group dev pytest -q` validates Python.
 
-```sh
-npm test          # Forecast, placement, and DOM interaction tests
-npm run typecheck
-npm run build    # TypeScript checks + production files in dist/
-npm run preview  # Serve the production build
-```
+## Modes and controls
 
-## Explore
+- Live forecast is the default view and uses the current ECMWF endpoint. Leave the start date empty for the next 48 hours, or choose a future UTC date within the available window. The backend records retrieval time without claiming the current model initialization time.
+- Historical replay selects one daily issue at `00:00 Asia/Almaty` between 31 January and 28 February 2026. This calendar is limited to the hackathon evaluation period. It requests an archived ECMWF forecast run. The source provides model initialization time, while the seven-hour publication lag is an estimate; exact historical availability is not proven by the provider.
+- The timeline switches between 24 and 48 hours and selects one hour from the downloaded series. Playback never refetches weather. The card, graph and turbine scene share that hour.
+- Power in the card and graph is normalized line-side power. With both points selected, the chart and card show their mean normalized value. No MW, MWh, rated capacity, or forecast confidence is inferred.
+- The assistant sends questions to `/api/ask` with the selected forecast run, hour, turbine, and visible horizon. The Python server loads that saved run. Peak normalized power is calculated directly from its hourly values; other natural-language questions use `OPENAI_API_KEY` from `.env` or the environment. Replies are kept short, and the key never goes to the browser. For wind-cause questions it also retrieves sea-level pressure at five nearby ECMWF grid points. Historical questions use the archived run saved with the forecast; live regional context is fetched separately and marked as an unverified run match. Pressure differences support a possible physical explanation, but cannot prove a specific front, cyclone, or terrain effect.
 
-- Drag the planet or focus its canvas and use arrow keys. Release to coast; reset restores the initial view.
-- Select a white turbine or its weather marker to inspect it. The turbine dropdown provides keyboard access, including turbines on the back of the planet.
-- Switch 1× / 2× camera framing, show/hide weather, or disable ambient motion in Display settings. OS reduced-motion preferences are respected.
-- Scrub or play the 24/48-hour timeline. Output, weather, and procedural blade speeds share the selected hour. Times are shown in UTC+5.
-- The bottom assistant answers peak-output and weather questions deterministically from the selected horizon. Unsupported questions receive an explicit demo limitation.
+The procedural turbine rotor speed is a bounded visual mapping of forecast wind at 100 m, not physical RPM. Wind direction rotates the visual turbine; the card shows the source direction numerically. The supplied GLB in `public/models/supplied-turbine.glb` is one static mesh with no separate `Rotor` node, so its blades cannot animate independently. See `public/models/ATTRIBUTION.md` for attribution. Cloud and precipitation effects are omitted because those variables are not fetched.
 
-## Model swaps
-
-`src/scene/config.ts` contains `earthModel` and `turbineModel`. Leave them `null` for procedural geometry, or set them to `/models/earth.glb` and `/models/turbine.glb` after adding those files to `public/models/`.
-
-`ModelAsset.tsx` uses `useGLTF` and clones the cached scene per instance. Turbines must be **Y-up**, with blades facing local +Z. The adapter centers X/Z, puts the lowest point at the base, and normalizes total height. For rotating imported blades, separate the rotor as a node named **`Rotor`**, with its pivot at the hub and rotation axis along local Z. A static mesh cannot animate its blades independently.
-
-The provided `assets/Wind turbine by Poly by Google - 8Tke6WIyZtg.glb` is copied unchanged to `public/models/supplied-turbine.glb`. Enable it in Display settings. It contains one static mesh and no animations; procedural animated turbines are the default. Original asset attribution is preserved in `public/models/ATTRIBUTION.md`.
-
-Earth assets are centered and uniformly normalized to the procedural diameter. Use a spherical surface: `latLonToVector3()` and `surfacePlacement()` in `placement.ts` position objects radially and rotate local +Y onto the surface normal. Irregular imported terrain needs a raycast/height-sampling placement adapter; the current positive clearance guarantees above-surface bases for the procedural sphere.
-
-## Tuning and structure
-
-| File | Responsibility / tuning |
-| --- | --- |
-| `src/App.tsx` | Selected hour/turbine, playback, horizon, zoom, preferences |
-| `src/forecast/forecast.ts` | Typed 48-hour fixtures, illustrative 3.6 MW turbine curve, aggregation, local assistant |
-| `src/scene/config.ts` | Float amplitude/speed, inertia, camera distances/damping, blade speed, marker height, model paths |
-| `src/scene/PlanetInteraction.tsx` | Pointer capture, inertial object rotation, camera transition, keyboard rotation |
-| `src/scene/Planet.tsx` | Faceted terrain, deterministic tree distribution, low-poly clouds |
-| `src/scene/Turbine.tsx` | Local surface alignment, rotor, selection, camera-facing occluded HTML markers |
-| `src/components/` | Metrics, timeline, assistant, and display controls |
-
-Camera zoom uses two presentation distances rather than browser scaling. The conceptual tree/turbine coordinates are decorative, not surveyed farm locations. Capacity, confidence, and all weather values are illustrative. Replace forecast fixtures with validated backend data to integrate the Python pipeline.
-
-The scene is lazy-loaded; DOM controls remain usable if WebGL or a model fails. The app requires WebGL for 3D; Google Fonts are optional, with local sans-serif fallbacks. No third-party Earth asset or remote environment map is used.
-
-## Validation
-
-Tests exercise forecast boundaries, hourly coverage, surface normals, turbine selection, horizon clamping, playback/wrapping, zoom/settings state, assistant responses, and reduced-motion defaults. DOM tests mock the canvas; they do not establish visual/WebGL correctness. Manually inspect desktop and mobile rendering, drag-versus-click, imported model appearance, and marker occlusion in a WebGL browser.
-
-API references: [React Three Fiber](https://r3f.docs.pmnd.rs/getting-started/introduction), [drei useGLTF](https://drei.docs.pmnd.rs/loaders/gltf-use-gltf).
+The scene is lazy-loaded and requires WebGL. Tests mock the canvas; inspect appearance, placement, and pointer behavior in a WebGL browser separately.

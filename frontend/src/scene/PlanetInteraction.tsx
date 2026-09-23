@@ -3,12 +3,12 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { Group, MathUtils } from 'three';
 import { sceneConfig } from './config';
 
-export function PlanetInteraction({ children, motion, reset }: { children: ReactNode; motion: boolean; reset: number }) {
+export function PlanetInteraction({ children, motion, reset, focus }: { children: ReactNode; motion: boolean; reset: number; focus: { lat: number; lon: number } }) {
   const root = useRef<Group>(null);
   const spin = useRef<Group>(null);
   const { gl } = useThree();
-  const state = useRef({ down: false, pointerId: -1, x: 0, y: 0, pitch: 0.08, yaw: -0.22, vx: 0, vy: 0 });
-  useEffect(() => { Object.assign(state.current, { pitch: 0.08, yaw: -0.22, vx: 0, vy: 0 }); }, [reset]);
+  const state = useRef({ down: false, pointerId: -1, x: 0, y: 0, pitch: 0, yaw: 0, vx: 0, vy: 0 });
+  useEffect(() => { Object.assign(state.current, { pitch: MathUtils.clamp(focus.lat * Math.PI / 180, -0.75, 0.75), yaw: -focus.lon * Math.PI / 180, vx: 0, vy: 0 }); }, [reset, focus.lat, focus.lon]);
   useEffect(() => {
     const canvas = gl.domElement;
     function down(e: PointerEvent) {

@@ -1,54 +1,97 @@
-export interface Turbine { id: string; name: string; region: string; lat: number; lon: number }
-export interface Reading { turbineId: string; windSpeed: number; temperature: number; direction: number; power: number; condition: 'sun' | 'cloud' }
+export interface Turbine { id: string; name: string; lat: number; lon: number }
+export interface Reading {
+  turbineId: string; windSpeed: number; windSpeed10m: number; temperature: number;
+  direction: number; pressure: number; power: number;
+}
 export interface ForecastHour { at: string; readings: Reading[] }
+export interface ForecastDocument {
+  metadata: {
+    mode: 'historical' | 'live'; issue_time_utc: string; target_start_utc: string; run_time_utc: string | null;
+    retrieved_at_utc: string | null; weather_source: string; weather_model: string;
+    model_version: string; run_id: string; weather_sha256: string; created_at_utc: string;
+    power_unit: string; warnings?: string[];
+  };
+  turbines: Turbine[]; hours: ForecastHour[];
+  analysis: Record<string, Record<string, number>>;
+}
+type RawPoint = { turbine_id: string; lead_hour: number; valid_time_utc: string };
+type RawWeather = RawPoint & { wind_speed_10m: number; wind_speed_100m: number; wind_direction_100m: number; temperature_2m: number; surface_pressure: number };
+type RawPower = RawPoint & { predicted_power: number };
+type RawDocument = Omit<ForecastDocument, 'turbines' | 'hours'> & { sites: { id: string; name: string; latitude: number; longitude: number }[]; weather: RawWeather[]; forecast: RawPower[] };
+function pointKey(point: RawPoint): string { return `${point.turbine_id}/${point.lead_hour}/${point.valid_time_utc}`; }
+function finite(value: number): boolean { return typeof value === 'number' && Number.isFinite(value); }
 
-// Illustrative layout coordinates, not real wind farm geography.
-export const turbines: Turbine[] = [
-  { id: 'T01', name: 'Turbine 01', region: 'North ridge', lat: 62, lon: -42 },
-  { id: 'T02', name: 'Turbine 02', region: 'East meadow', lat: 35, lon: 34 },
-  { id: 'T03', name: 'Turbine 03', region: 'West grove', lat: 25, lon: -54 },
-  { id: 'T04', name: 'Turbine 04', region: 'Highland', lat: 68, lon: 115 },
-  { id: 'T05', name: 'Turbine 05', region: 'South field', lat: -14, lon: 18 },
-  { id: 'T06', name: 'Turbine 06', region: 'Far valley', lat: 15, lon: 158 },
-];
-
-export function powerFromWind(speed: number): number {
-  if (!Number.isFinite(speed) || speed < 3 || speed >= 25) return 0;
-  return 3.6 * Math.min(1, (speed ** 3 - 3 ** 3) / (12 ** 3 - 3 ** 3));
+export function parseForecast(raw: RawDocument): ForecastDocument {
+  if (!raw?.metadata || raw.sites?.length !== 2 || raw.weather?.length !== 96 || raw.forecast?.length !== 96) throw new Error('Forecast response is incomplete.');
+  if (!['historical', 'live'].includes(raw.metadata.mode) || !raw.metadata.model_version || !raw.metadata.weather_source || !Number.isFinite(Date.parse(raw.metadata.target_start_utc))) throw new Error('Forecast provenance is incomplete.');
+  const turbines = raw.sites.map(site => ({ id: site.id, name: site.name, lat: site.latitude, lon: site.longitude }));
+  if (new Set(turbines.map(t => t.id)).size !== 2 || turbines.some(t => !finite(t.lat) || !finite(t.lon))) throw new Error('Turbine locations are invalid.');
+  const powers = new Map<string, number>();
+  for (const row of raw.forecast) {
+    const key = pointKey(row);
+    if (powers.has(key) || !finite(row.predicted_power) || row.predicted_power < 0 || row.predicted_power > 1) throw new Error('Power forecast is invalid.');
+    powers.set(key, row.predicted_power);
+  }
+  const byLead = new Map<number, ForecastHour>();
+  for (const row of raw.weather) {
+    const power = powers.get(pointKey(row));
+    if (power === undefined || !turbines.some(t => t.id === row.turbine_id) || ![row.wind_speed_10m, row.wind_speed_100m, row.wind_direction_100m, row.temperature_2m, row.surface_pressure].every(finite)) throw new Error('Weather and power rows do not align.');
+    if (!Number.isInteger(row.lead_hour) || row.lead_hour < 1 || row.lead_hour > 48 || !Number.isFinite(Date.parse(row.valid_time_utc))) throw new Error('Forecast time is invalid.');
+    const hour = byLead.get(row.lead_hour) ?? { at: row.valid_time_utc, readings: [] };
+    if (hour.at !== row.valid_time_utc || hour.readings.some(r => r.turbineId === row.turbine_id)) throw new Error('Duplicate or unaligned forecast hour.');
+    hour.readings.push({ turbineId: row.turbine_id, windSpeed: row.wind_speed_100m, windSpeed10m: row.wind_speed_10m, temperature: row.temperature_2m, direction: row.wind_direction_100m, pressure: row.surface_pressure, power });
+    byLead.set(row.lead_hour, hour);
+  }
+  const hours = Array.from({ length: 48 }, (_, index) => byLead.get(index + 1));
+  if (hours.some((hour, index) => !hour || hour.readings.length !== 2 || Date.parse(hour.at) !== Date.parse(raw.metadata.target_start_utc) + (index + 1) * 3600000)) throw new Error('Forecast must contain 48 aligned hours for both turbines.');
+  return { metadata: raw.metadata, turbines, hours: hours as ForecastHour[], analysis: raw.analysis };
 }
 
-const origin = Date.parse('2026-09-23T04:00:00Z');
-export const forecast: ForecastHour[] = Array.from({ length: 48 }, (_, h) => ({
-  at: new Date(origin + h * 3600000).toISOString(),
-  readings: turbines.map((t, i) => {
-    const windSpeed = 8.7 + Math.sin(h / 5 + i * 0.3) * 2.1 + Math.cos(h / 2.8 + i) * 0.65;
-    return { turbineId: t.id, windSpeed, temperature: 17 + Math.sin(h / 4 - 0.5) * 5 - i * 0.2, direction: Math.round(42 + Math.sin(h / 8) * 18), power: powerFromWind(windSpeed), condition: (h + i) % 7 < 3 ? 'cloud' : 'sun' };
-  }),
-}));
+export async function fetchForecast(mode: 'historical' | 'live', issue?: string, start?: string): Promise<ForecastDocument> {
+  const query = new URLSearchParams({ mode });
+  if (mode === 'historical' && issue) query.set('issue', issue);
+  if (mode === 'live' && start) query.set('start', start);
+  let response: Response;
+  try { response = await fetch(`/api/forecast?${query}`); }
+  catch { throw new Error('API_UNAVAILABLE: Cannot reach the forecasting service.'); }
+  let body: Record<string, unknown>;
+  try { body = await response.json(); }
+  catch { throw new Error('API_UNAVAILABLE: Forecasting service returned no JSON.'); }
+  if (!response.ok) throw new Error(`${body.error_code ?? 'FORECAST_ERROR'}: ${body.message ?? 'Forecast request failed.'}`);
+  return parseForecast(body as RawDocument);
+}
+
+export interface ForecastQuestion {
+  run_id: string; question: string; selected_lead_hour: number;
+  selected_turbine_id: string | null; horizon: 24 | 48;
+}
+
+export async function askForecast(request: ForecastQuestion): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch('/api/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
+    });
+  } catch { throw new Error('API_UNAVAILABLE: Cannot reach the forecast assistant.'); }
+  let body: { answer?: string; error_code?: string; message?: string };
+  try { body = await response.json(); }
+  catch { throw new Error('API_UNAVAILABLE: Assistant returned no JSON.'); }
+  if (!response.ok) throw new Error(`${body.error_code ?? 'ASSISTANT_ERROR'}: ${body.message ?? 'Assistant request failed.'}`);
+  if (typeof body.answer !== 'string' || !body.answer.trim()) throw new Error('ASSISTANT_ERROR: Assistant returned no answer.');
+  return body.answer;
+}
 
 export function summarize(hour: ForecastHour) {
-  const total = hour.readings.reduce((a, r) => ({ power: a.power + r.power, windSpeed: a.windSpeed + r.windSpeed, temperature: a.temperature + r.temperature, direction: a.direction + r.direction }), { power: 0, windSpeed: 0, temperature: 0, direction: 0 });
-  const n = hour.readings.length || 1;
-  return { power: total.power, windSpeed: total.windSpeed / n, temperature: total.temperature / n, direction: Math.round(total.direction / n) };
+  const n = hour.readings.length;
+  if (!n) throw new Error('Empty forecast hour.');
+  return {
+    power: hour.readings.reduce((sum, reading) => sum + reading.power, 0) / n,
+    windSpeed: hour.readings.reduce((sum, reading) => sum + reading.windSpeed, 0) / n,
+    temperature: hour.readings.reduce((sum, reading) => sum + reading.temperature, 0) / n,
+  };
 }
-
 export function hourLabel(at: string, includeDate = false) {
   const date = new Date(at);
   const time = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Almaty', hour: '2-digit', minute: '2-digit' }).format(date);
   return includeDate ? `${new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Almaty', day: 'numeric', month: 'short' }).format(date)} · ${time}` : time;
-}
-
-// Local deterministic demo, deliberately no API keys or implied live AI service.
-export function answerQuestion(question: string, hours: ForecastHour[]): string {
-  if (!hours.length) return 'No forecast is available for this period.';
-  if (/peak|best|highest|maximum|power|output|energy/i.test(question)) {
-    const peak = hours.reduce((best, h) => summarize(h).power > summarize(best).power ? h : best);
-    const energy = hours.reduce((total, h) => total + summarize(h).power, 0);
-    return `In this ${hours.length}-hour demo forecast, output peaks at ${summarize(peak).power.toFixed(1)} MW on ${hourLabel(peak.at, true)} (UTC+5). Total forecast energy is ${energy.toFixed(1)} MWh. These are illustrative values, not operational predictions.`;
-  }
-  if (/wind|weather|temperature/i.test(question)) {
-    const speeds = hours.map(h => summarize(h).windSpeed);
-    return `Average farm wind ranges from ${Math.min(...speeds).toFixed(1)} to ${Math.max(...speeds).toFixed(1)} m/s over the selected ${hours.length} hours. Move the timeline to explore how weather changes each turbine’s output. This is mock weather data.`;
-  }
-  return 'I can explore this local demo forecast. Try asking “When is peak power?” or “What is the wind outlook?”. No live AI service is connected.';
 }

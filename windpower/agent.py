@@ -13,7 +13,8 @@ from langsmith import Client, tracing_context
 import pandas as pd
 from typing_extensions import NotRequired
 
-from windpower import agent_tools, features, forecast, source_search, store, weather
+from windpower import agent_tools, features, forecast, source_search, store
+from windpower.weather_provider import OpenMeteoWeatherProvider, WeatherProvider
 
 
 WeatherFetcher = Callable[[datetime], pd.DataFrame]
@@ -24,6 +25,8 @@ MAX_DAILY_ISSUES = 29
 
 class ForecastState(TypedDict):
     issue_input: datetime
+    mode: str
+    target_start_input: NotRequired[datetime]
     events: list[dict[str, str]]
     issue: NotRequired[datetime]
     weather: NotRequired[pd.DataFrame]
@@ -71,13 +74,15 @@ class ForecastAgent:
         output_dir: Path,
         weather_fetcher: WeatherFetcher | None = None,
         web_searcher: WebSearcher | None = None,
+        weather_provider: WeatherProvider | None = None,
     ) -> None:
         if not callable(predictor) or not model_version.strip():
             raise ValueError("a callable trained model and nonempty model version are required")
         self.model_version = model_version
         self.output_dir = Path(output_dir)
+        self.provider = weather_provider or OpenMeteoWeatherProvider(Path(cache_dir))
         self.fetch_weather = weather_fetcher or (
-            lambda issue: weather.fetch_issue(issue, Path(cache_dir))
+            self.provider.get_historical_forecast
         )
         self.predictor = RunnableLambda(predictor, name="predict_power")
 
@@ -86,8 +91,8 @@ class ForecastAgent:
         graph = StateGraph(ForecastState)
         actions = (
             lambda state: forecast.normalize_issue(state["issue_input"]),
-            lambda state: self.weather_tool.invoke({"issue_time_utc": state["issue"].isoformat()}),
-            lambda state: forecast.validate_weather(state["weather"], state["issue"]),
+            self._fetch_weather,
+            lambda state: forecast.validate_weather(state["weather"], state["issue"], state["mode"], state.get("target_start_input")),
             lambda state: features.make_features(state["checked_weather"]),
             lambda state: self.predictor.invoke(state["features"]),
             lambda state: forecast.validate_prediction(state["prediction"], state["checked_weather"]),
@@ -104,7 +109,8 @@ class ForecastAgent:
         graph.add_edge(self.STEPS[-1][0], END)
         self.graph = graph.compile()
 
-    def run(self, issue_utc: datetime) -> AgentResult:
+    def run(self, issue_utc: datetime, mode: str = "historical",
+            target_start_utc: datetime | None = None) -> AgentResult:
         """Return a saved forecast or a classified failure with completed steps."""
         config = {"recursion_limit": len(self.STEPS) + 3}
         tracing = os.getenv("LANGSMITH_TRACING", "").lower() == "true"
@@ -117,7 +123,8 @@ class ForecastAgent:
         # Suppress ambient tracing, which could publish raw graph state. The explicit
         # tracer above uses a client that removes inputs, outputs, and metadata.
         with tracing_context(enabled=False):
-            state = self.graph.invoke({"issue_input": issue_utc, "events": []}, config=config)
+            state = self.graph.invoke({"issue_input": issue_utc, "mode": mode,
+                                       "target_start_input": target_start_utc, "events": []}, config=config)
         if "error_code" in state:
             return AgentResult(
                 "FAILED", None, None, None, tuple(state["events"]),
@@ -133,6 +140,13 @@ class ForecastAgent:
         """Search current public pages without adding results to forecast state."""
         with tracing_context(enabled=False):
             return self.search_tool.invoke({"query": query})
+
+    def _fetch_weather(self, state: ForecastState) -> pd.DataFrame:
+        if state["mode"] == "historical":
+            return self.weather_tool.invoke({"issue_time_utc": state["issue"].isoformat()})
+        if state["mode"] == "live":
+            return self.provider.get_forecast(state["issue"], state.get("target_start_input"))
+        raise ValueError("mode must be historical or live")
 
     def run_daily(self, first_issue_utc: datetime, last_issue_utc: datetime) -> tuple[AgentResult, ...]:
         """Run at the same UTC hour each day, stopping at the first failed issue."""
@@ -181,5 +195,6 @@ class ForecastAgent:
         events = [*state["events"], {"step": "save_forecast", "status": "SUCCESS"}]
         return store.save_run(
             pd.Timestamp(state["issue"]), state["checked_weather"], state["forecast"],
-            self.model_version, state["analysis"], events, self.output_dir,
+            self.model_version, state["analysis"], events, self.output_dir, state["mode"],
+            state.get("target_start_input"),
         )

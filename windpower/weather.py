@@ -12,6 +12,8 @@ import requests
 
 URL = "https://single-runs-api.open-meteo.com/v1/forecast"
 PUBLICATION_DELAY_HOURS = 7
+LIVE_URL = "https://api.open-meteo.com/v1/ecmwf"
+LIVE_FORECAST_DAYS = 10
 SITES = (("1", 43.645150, 78.535604), ("2", 43.643198, 78.538828))
 VARIABLES = (
     "wind_speed_10m", "wind_speed_100m", "wind_direction_100m",
@@ -31,10 +33,17 @@ def select_run(issue_utc: datetime, delay_hours: int = PUBLICATION_DELAY_HOURS) 
     return eligible.replace(hour=eligible.hour // 6 * 6, minute=0, second=0, microsecond=0)
 
 
-def _parse_payload(payload: list[dict], issue: datetime, run: datetime) -> pd.DataFrame:
+def live_last_valid_time(issue_utc: datetime) -> datetime:
+    """Last UTC hour in a forecast_days window anchored to the current day."""
+    issue = issue_utc.astimezone(timezone.utc)
+    return issue.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=LIVE_FORECAST_DAYS, hours=-1)
+
+
+def _parse_payload(payload: list[dict], issue: datetime, run: datetime,
+                   target_start: datetime | None = None) -> pd.DataFrame:
     if not isinstance(payload, list) or len(payload) != len(SITES):
         raise ValueError("weather response must contain both turbine locations")
-    expected = pd.date_range(issue + timedelta(hours=1), periods=48, freq="h", tz="UTC")
+    expected = pd.date_range((target_start or issue) + timedelta(hours=1), periods=48, freq="h", tz="UTC")
     frames = []
     for (turbine_id, requested_latitude, requested_longitude), site in zip(SITES, payload):
         hourly = site.get("hourly", {})
@@ -126,4 +135,37 @@ def fetch_issue(issue_utc: datetime, cache_dir: Path, session: requests.Session 
     result = _parse_payload(payload, issue, run)
     result.attrs["weather_sha256"] = digest
     result.attrs["weather_source"] = URL
+    return result
+
+
+def fetch_live(issue_utc: datetime, session: requests.Session | None = None,
+               target_start_utc: datetime | None = None) -> pd.DataFrame:
+    """Fetch the current ECMWF forecast for the next 48 hours; no archive claims."""
+    if issue_utc.tzinfo is None or issue_utc.utcoffset() is None:
+        raise ValueError("issue time must have timezone")
+    issue = issue_utc.astimezone(timezone.utc)
+    if issue.minute or issue.second or issue.microsecond:
+        raise ValueError("issue time must be at an exact hour")
+    if abs((datetime.now(timezone.utc) - issue).total_seconds()) > 3600:
+        raise ValueError("live issue must be within one hour of current UTC time")
+    target = (target_start_utc or issue).astimezone(timezone.utc)
+    if target.minute or target.second or target.microsecond:
+        raise ValueError("live target start must be an exact UTC hour")
+    if target < issue or target + timedelta(hours=48) > live_last_valid_time(issue):
+        raise ValueError("live target must fit the current ten-day forecast window")
+    params = {
+        "latitude": ",".join(str(site[1]) for site in SITES),
+        "longitude": ",".join(str(site[2]) for site in SITES),
+        "hourly": ",".join(VARIABLES),
+        "wind_speed_unit": "ms", "timezone": "UTC", "forecast_days": LIVE_FORECAST_DAYS,
+    }
+    response = (session or requests.Session()).get(LIVE_URL, params=params, timeout=60)
+    response.raise_for_status()
+    payload = response.json()
+    # The live endpoint does not identify an individual model initialization.
+    # This timestamp records retrieval, not a weather model run.
+    result = _parse_payload(payload, issue, issue, target)
+    result.attrs["retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
+    result.attrs["weather_source"] = LIVE_URL
+    result.attrs["weather_sha256"] = sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return result

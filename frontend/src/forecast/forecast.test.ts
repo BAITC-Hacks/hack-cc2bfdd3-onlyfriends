@@ -1,29 +1,30 @@
-import { describe, expect, it } from 'vitest';
-import { forecast, turbines, powerFromWind, summarize, answerQuestion } from './forecast';
+import { describe, expect, it, vi } from 'vitest';
+import { askForecast, parseForecast, summarize } from './forecast';
+import { fixture } from './testFixture';
 
-describe('demo forecast', () => {
-  it('provides 48 consecutive hourly readings for every turbine', () => {
-    expect(forecast).toHaveLength(48);
-    forecast.forEach((hour, i) => {
-      expect(Date.parse(hour.at) - Date.parse(forecast[0].at)).toBe(i * 3600000);
-      expect(hour.readings).toHaveLength(turbines.length);
-      hour.readings.forEach(r => {
-        expect(r.power).toBeGreaterThanOrEqual(0);
-        expect(r.power).toBeLessThanOrEqual(3.6);
-      });
-    });
+describe('forecast transport', () => {
+  it('joins real weather and model power by turbine, hour, and timestamp', () => {
+    const document = parseForecast(fixture());
+    expect(document.hours).toHaveLength(48);
+    expect(document.turbines.map(turbine => turbine.id)).toEqual(['1', '2']);
+    expect(document.hours[0].readings[0].windSpeed).toBeCloseTo(7.1);
+    expect(document.hours[0].readings[0].power).toBeCloseTo(1 / 48);
+    expect(summarize(document.hours[47]).power).toBe(1);
   });
-  it('honors cut-in, rated and safety cut-out speeds', () => {
-    expect(powerFromWind(2)).toBe(0);
-    expect(powerFromWind(12)).toBe(3.6);
-    expect(powerFromWind(26)).toBe(0);
+  it('rejects missing or forged model output', () => {
+    const incomplete = fixture();
+    incomplete.forecast.pop();
+    expect(() => parseForecast(incomplete)).toThrow('incomplete');
+    const invalid = fixture();
+    invalid.forecast[0].predicted_power = 3.6;
+    expect(() => parseForecast(invalid)).toThrow('invalid');
   });
-  it('aggregates only the selected hour', () => {
-    expect(summarize(forecast[0]).power).toBeCloseTo(forecast[0].readings.reduce((sum, r) => sum + r.power, 0));
-    expect(summarize(forecast[0]).power).not.toBe(summarize(forecast[12]).power);
-  });
-  it('answers from the selected horizon and admits unsupported questions', () => {
-    expect(answerQuestion('peak power', forecast.slice(0, 24))).toContain('MW');
-    expect(answerQuestion('buy me a car', forecast)).toContain('Try asking');
+  it('sends the selected forecast context for Russian questions', async () => {
+    const request = { run_id: 'a'.repeat(20), question: 'Почему сегодня сильный ветер?', selected_lead_hour: 4, selected_turbine_id: '2', horizon: 24 as const };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ answer: 'На 23 февраля прогнозируется сильный ветер.' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await askForecast(request)).toContain('23 февраля');
+    expect(fetchMock).toHaveBeenCalledWith('/api/ask', expect.objectContaining({ method: 'POST', body: JSON.stringify(request) }));
+    vi.unstubAllGlobals();
   });
 });
