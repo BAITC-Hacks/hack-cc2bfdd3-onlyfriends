@@ -10,3 +10,4 @@ raw/
 artifacts/
 .superpowers/
 *.pyc
+*.pyc
