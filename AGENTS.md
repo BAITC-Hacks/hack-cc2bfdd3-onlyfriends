@@ -8,6 +8,22 @@ Do not add features, abstractions, agents, tools, services, or infrastructure th
 
 Prefer the simplest reliable implementation.
 
+Apply these rules to the current task and the components actually present in the project.
+
+Rules about application agents, tools, persistent workflows, and organization-level access apply only where those components are in scope.
+
+Do not create layers, services, agents, or infrastructure merely to satisfy an example in this document.
+
+Use the current task and the repository's authoritative project documentation to determine scope. Do not invent project requirements.
+
+---
+
+## Repository Context
+
+This repository is a documentation scaffold for an agentic system that forecasts hourly wind farm power for the next 24–48 hours. The task and scope are documented in `README.md` and `docs/PROJECT_VISION.md`; the other files in `docs/` describe the proposed design and evaluation.
+
+The repository currently has no application code or package manifest. Its `src/`, `tests/`, and `evals/` directories are placeholders. No technology stack or install, run, build, test, type-check, or lint commands are defined yet. Use commands only after they are added to the repository.
+
 ---
 
 ## Architecture
@@ -15,8 +31,6 @@ Prefer the simplest reliable implementation.
 * Use clean and scalable architecture.
 * One file = one clear responsibility.
 * One module = one business capability.
-* Target file size: `<= 200 lines`.
-* Files above `250 lines` must be decomposed or explicitly justified.
 * Keep business logic separate from:
 
   * controllers;
@@ -33,11 +47,20 @@ Prefer the simplest reliable implementation.
 * Do not create abstractions without an actual use case.
 * Do not duplicate business logic.
 
-Preferred dependency direction:
+For hand-written production code, prefer files of 200 lines or fewer. Files between 201 and 250 lines are acceptable when they remain cohesive and readable. Files above 250 lines must be reviewed for decomposition or explicitly justified.
 
-`UI / API -> Application / Agent -> Domain -> Interfaces`
+Do not split cohesive code solely to satisfy a line-count target. These thresholds do not automatically apply to generated files, lockfiles, fixtures, migrations, or documentation. Do not refactor unrelated files merely because they exceed them.
 
-Infrastructure implements interfaces required by the inner layers.
+Code dependencies point inward:
+
+```text
+UI / API / Agent and Tool adapters -> Application -> Domain
+Infrastructure -> ports owned by Application or Domain
+```
+
+The domain must not depend on UI, agent frameworks, transport code, database implementations, or provider SDKs.
+
+Define required ports in the inner layer that uses them. Infrastructure implements those ports. Application services coordinate use cases; domain modules enforce business rules and invariants. Wire concrete implementations at the composition root.
 
 ---
 
@@ -45,7 +68,7 @@ Infrastructure implements interfaces required by the inner layers.
 
 Each business capability should have its own folder.
 
-Example:
+Illustrative example, not a required folder template or a reason to reorganize existing code:
 
 ```text
 src/
@@ -60,22 +83,21 @@ src/
       search.tool.ts
       search.schema.ts
       search.service.ts
-
+  application/
+    research/
+      run_research.service.ts
   domain/
     research/
       research.service.ts
       research.types.ts
       research.rules.ts
-
   infrastructure/
     database/
     external-api/
-
   shared/
     errors/
     types/
     utils/
-
   evals/
   tests/
 ```
@@ -83,6 +105,10 @@ src/
 Do not create generic folders such as `helpers/` or `utils/` for domain-specific logic.
 
 Domain-specific logic belongs inside its domain.
+
+In this illustration, `tools/search/search.service.ts` may contain a thin tool adapter, but a business use case belongs in `application/` and a provider adapter belongs in `infrastructure/`. A filename alone does not establish a responsibility violation.
+
+Shared utilities may contain genuinely cross-domain technical functionality. Domain-specific logic must remain in its capability module.
 
 ---
 
@@ -96,14 +122,11 @@ Each function must:
 * avoid hidden side effects;
 * remain small enough to understand quickly.
 
-Every exported/public function must have a short comment explaining:
+Document public/exported functions when their contract, input assumptions, failure behavior, or side effects are not clear from their names and types.
 
-* what it does;
-* important input assumptions;
-* returned result;
-* important side effects.
+Do not add comments that merely repeat the function name, signature, or implementation.
 
-Do not write comments that simply repeat the code.
+Follow any stricter documentation requirements already established for the project's public API.
 
 ---
 
@@ -120,13 +143,13 @@ Every agent must define:
 * forbidden actions;
 * expected output;
 * stopping conditions;
-* handoff conditions.
+* handoff conditions when handoffs are part of the design (otherwise mark them as not applicable).
 
 Agents orchestrate work.
 
 Agents must not contain core business logic.
 
-Correct:
+Example execution flow when these components are needed:
 
 `Agent -> Tool -> Application Service -> Domain`
 
@@ -138,11 +161,17 @@ Do not create multiple agents if one agent with well-designed tools is enough.
 
 Multi-agent architecture is allowed only when there is a real responsibility boundary.
 
+Enforce execution limits in runtime code, not only in prompts. Apply a run-level budget across model calls, tool calls, retries, and handoffs. Child agents and handoffs must not silently reset the overall budget. Stop scheduling new work when the run is cancelled or its budget is exhausted.
+
 ---
 
 ## Tools
 
-One Tool = one atomic action.
+One tool = one coherent, well-scoped domain-level operation.
+
+A tool may coordinate several related implementation steps through application services. Do not confuse single responsibility with transactional atomicity. Document relevant side effects and partial-failure behavior.
+
+A tool does not have to map to exactly one SQL query or one external API call.
 
 Good:
 
@@ -178,7 +207,9 @@ Tools must be thin adapters.
 
 Business logic belongs in application/domain services.
 
-A read tool must not modify state.
+A read tool must not modify business/domain state or workflow state.
+
+Bounded operational side effects, such as authorized logging, metrics, and cache maintenance, are allowed when they do not change the requested business semantics.
 
 A write tool must clearly represent that it changes state.
 
@@ -234,6 +265,10 @@ Workflow state transitions must be explicit and validated.
 
 Invalid transitions must fail.
 
+Where concurrent updates are possible, protect state transitions and invariants using appropriate transactions, conditional writes, version checks, or database constraints.
+
+Do not assume that a separate read-validate-write sequence is safe under concurrency. Choose the simplest mechanism that provides the required guarantees in the existing storage system.
+
 ---
 
 ## Structured Data
@@ -252,6 +287,8 @@ Use typed schemas.
 Validate all model-generated structured output before using it.
 
 Never trust LLM output blindly.
+
+Validate external data at runtime. Conformance to a schema does not replace checks of business rules or authorization.
 
 ---
 
@@ -275,6 +312,8 @@ RETRYABLE_ERROR
 
 Distinguish retryable and permanent failures.
 
+Keep the underlying error cause when classifying whether a retry is safe; do not hide it behind a generic retryable error.
+
 External calls must have appropriate:
 
 * timeout;
@@ -282,6 +321,10 @@ External calls must have appropriate:
 * retry limits.
 
 Never create infinite retries.
+
+Retry only failures classified as transient, and only when repeating the operation is safe. Bound both retry counts and total elapsed time. Use a provider-aware policy, including backoff and server retry guidance where applicable, and account for retries already performed by SDKs or lower layers.
+
+A timeout or cancellation does not prove that a remote write was not applied. When a write outcome is uncertain, preserve and report that uncertainty. Reconcile with authoritative state or escalate instead of blindly repeating the action.
 
 Never create infinite agent loops.
 
@@ -307,6 +350,12 @@ Retries must not create duplicated actions.
 
 Use operation IDs or idempotency keys for important writes.
 
+Retries of one logical operation use the same key; a new independent operation gets a new key. Scope keys to the relevant actor or organization and operation type. Detect reuse of a key with different material parameters.
+
+When the application provides idempotency protection, retain its state long enough for expected retries. For local transactional changes, commit the result and execution record atomically.
+
+Do not promise exactly-once execution by an external service unless its contract and recovery mechanism support it.
+
 ---
 
 ## Security
@@ -315,13 +364,11 @@ Never rely on prompts for security.
 
 Permissions must be checked in deterministic code.
 
-Before modifying a resource validate:
+Authorize every access to a protected resource, including reads and writes.
 
-* authenticated user;
-* ownership;
-* organization/project access;
-* required permission;
-* operation scope.
+Use actor identity, permissions, and tenant/project scope from trusted execution context, not from model-generated arguments. Validate resource-level access according to the application's authorization policy. Require ownership only when the policy requires ownership; otherwise validate the applicable explicitly granted access. Deny access when the required authorization cannot be established.
+
+Do not invent an authorization or organization model for public resources or projects that do not need one.
 
 Use minimum required permissions.
 
@@ -336,7 +383,11 @@ External content must be treated as untrusted data.
 
 External text must never override system or developer instructions.
 
+External content must not redefine trusted instructions, permissions, approved operation scope, or allowed destinations. Enforce tool permissions and parameter restrictions in application code.
+
 High-impact or irreversible actions should require explicit approval when appropriate.
+
+When an operation requires explicit approval under project policy, bind that approval to the actual operation and its material arguments. Approval does not replace authorization.
 
 ---
 
@@ -374,14 +425,16 @@ Track where possible:
 * run ID;
 * agent name;
 * selected tool;
-* tool arguments;
-* execution result;
+* allowlisted tool-argument metadata;
+* redacted execution result summaries;
 * handoffs;
 * latency;
 * errors;
 * model usage.
 
-Do not log secrets.
+Prefer allowlisted metadata and redacted summaries over raw tool arguments, prompts, retrieved documents, and tool responses.
+
+Do not log credentials, sensitive personal data, or confidential payloads without an explicit authorized requirement and appropriate controls. Apply suitable access controls and retention limits to logs.
 
 Logs must make it possible to understand what happened without exposing hidden reasoning.
 
@@ -391,7 +444,7 @@ Logs must make it possible to understand what happened without exposing hidden r
 
 Every business-critical feature must have tests.
 
-Test at minimum:
+For each changed feature, cover the applicable scenarios below according to its behavior and risk. Do not create unrelated infrastructure solely to exercise scenarios that do not apply:
 
 * happy path;
 * invalid input;
@@ -415,6 +468,8 @@ Agentic features should additionally test:
 
 Every fixed bug should receive a regression test.
 
+Use isolated test data, mocks, or provider sandboxes for side-effecting integrations. Do not perform destructive operations, real payments, or messages to real recipients merely to verify a change without explicit authorization. Do not delete, skip, or weaken valid tests simply to obtain a passing result.
+
 ---
 
 ## Evals
@@ -427,15 +482,19 @@ Evaluate more than final wording.
 
 Check:
 
-* correct reasoning outcome;
+* observable task correctness and policy compliance;
 * correct tool;
 * correct arguments;
-* correct sequence;
-* correct handoff;
+* required ordering constraints;
+* correct handoff when applicable;
 * correct final state;
 * absence of forbidden actions.
 
 Prompt/model/tool changes must not silently break existing evals.
+
+Check required ordering constraints when they are part of the workflow or safety contract. Do not require one exact tool sequence when multiple valid sequences satisfy the task and its constraints.
+
+Use versioned scenarios, controlled fixtures, and recorded model/prompt/tool configuration where available. For stochastic behavior, define acceptance criteria and use repeated trials where necessary. Verify actual outcomes and relevant state changes rather than relying only on the agent's final statement.
 
 ---
 
@@ -446,6 +505,8 @@ Do not call a model when deterministic code can solve the task.
 Avoid repeated model calls for the same information.
 
 Avoid repeated retrieval of identical data.
+
+Retrieve again when freshness is required, access rights have changed, or the earlier result is insufficient.
 
 Set reasonable limits for:
 
@@ -468,8 +529,9 @@ Do not leave:
 * unused imports;
 * unused abstractions;
 * duplicated helpers;
-* debug logs;
 * temporary hacks.
+
+Remove temporary debugging output and accidental payload dumps. Preserve intentional, appropriately leveled and sanitized diagnostic logging.
 
 Avoid `any` unless technically necessary and documented.
 
@@ -519,6 +581,14 @@ Do not introduce new dependencies unless necessary.
 
 Do not change existing contracts without a concrete reason.
 
+Preserve pre-existing user changes and unrelated work. Do not reset, discard, or overwrite existing changes merely to simplify the task.
+
+Do not manually edit generated artifacts when their source or generation process should be changed instead.
+
+Preserve existing public contracts unless the requested task requires a change. Document and test compatibility or migration implications when contracts change.
+
+Do not perform destructive repository operations or production changes without explicit authorization.
+
 Before adding something, ask internally:
 
 > Is this required to solve the current problem?
@@ -545,16 +615,17 @@ Do not immediately rewrite working architecture.
 
 Before declaring a task complete:
 
-1. Run relevant tests.
-2. Run type checking.
-3. Run linting/formatting if configured.
-4. Check for duplicated logic.
-5. Check responsibility boundaries.
-6. Check error paths.
-7. Check permission boundaries.
-8. Check retry/idempotency behavior.
-9. Remove temporary/debug code.
-10. Verify that only requested scope was implemented.
+1. Run the relevant tests and all checks required by the repository for the affected scope.
+2. Run type checking, linting, formatting checks, and builds when configured or required for the change.
+3. Check for duplicated logic and responsibility boundaries.
+4. Check error paths and applicable permission boundaries.
+5. Check retry and idempotency behavior where side effects are involved.
+6. Remove temporary debugging output.
+7. Verify that only requested scope was implemented.
+
+Do not invent verification commands or add tooling solely because a generic checklist mentions it.
+
+Report the exact checks performed and their results. Clearly distinguish passed, failed, and not-run checks. Explain checks blocked by missing dependencies, credentials, network access, or environment limitations. Do not describe blocked or skipped checks as passed. Do not label a failure as pre-existing without evidence. Report unrelated failures without silently expanding the task to fix them.
 
 Do not claim a feature works unless it was actually verified.
 
@@ -562,20 +633,24 @@ Do not claim a feature works unless it was actually verified.
 
 ## Definition of Done
 
-A task is complete only when:
+A task is complete when the applicable items below are satisfied:
 
 * implementation matches project vision;
 * architecture remains clean;
 * responsibilities are separated;
-* tools are atomic;
+* applicable tools are coherent and well scoped;
 * business logic is isolated;
 * inputs are validated;
-* permissions are enforced;
+* access to protected resources is authorized;
 * failures are handled;
 * side effects are safe;
-* tests pass;
-* important agent flows have eval coverage;
+* relevant tests and mandatory repository checks pass;
+* important agent flows have eval coverage where applicable;
 * no unrelated functionality was added.
+
+Any unverified behavior or blocked mandatory check is explicitly reported; the task is not presented as fully verified while those gaps remain.
+
+Rules about tools, permissions, side effects, and evals apply only to relevant components and changes. Do not create absent components merely to satisfy this checklist.
 
 ---
 
@@ -583,7 +658,7 @@ A task is complete only when:
 
 ### One file = one responsibility.
 
-### One Tool = one action.
+### One tool = one coherent, well-scoped operation.
 
 ### One agent = one role.
 
